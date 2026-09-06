@@ -1,0 +1,18 @@
+{
+  "name": "siber-besli-2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "verify": "node scripts/verify-world.mjs && node scripts/verify-project.mjs && vite build"
+  },
+  "dependencies": {
+    "three": "0.179.1"
+  },
+  "devDependencies": {
+    "vite": "^7.3.6"
+  }
+}

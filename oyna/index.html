@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#19384a" />
+    <meta name="description" content="Siber Beşli 2 havada asılı adalar dünyası." />
+    <title>Siber Beşli 2 — Gökyüzü Adaları</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/game.css" />
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="world-canvas" aria-label="Havada asılı adalar dünyası"></canvas>
+
+      <header class="topbar">
+        <div class="brand">
+          <span>SİBER BEŞLİ 2</span>
+          <strong id="region-name">Helios Takımadaları</strong>
+        </div>
+        <button id="camera-mode" class="mode-button" type="button" aria-label="Kamera modu: Gezinti">
+          <span class="mode-button__icon" aria-hidden="true">◎</span>
+          <span id="camera-mode-label">Gezinti</span>
+        </button>
+      </header>
+
+      <div id="mode-title" class="mode-title" aria-live="polite">Gezinti</div>
+      <div id="locked-toast" class="toast" role="status" aria-live="polite">Bu bölge henüz kilitli</div>
+      <div id="loading" class="loading" role="status">Dünya kuruluyor…</div>
+      <div id="fps" class="fps" hidden>-- FPS</div>
+
+      <div id="island-labels" class="island-labels" aria-hidden="true"></div>
+      <div id="region-labels" class="region-labels" aria-hidden="true"></div>
+
+      <section id="island-card" class="island-card" aria-live="polite">
+        <div>
+          <span class="island-card__eyebrow">SEÇİLİ ADA</span>
+          <strong id="island-name">Güneş Kapısı</strong>
+        </div>
+        <div id="difficulty" class="difficulty" aria-label="Zorluk: 1 / 5">
+          <span class="difficulty__label">ZORLUK</span>
+          <span id="difficulty-dots" class="difficulty__dots">●○○○○</span>
+        </div>
+      </section>
+
+      <p class="gesture-hint">Döndürmek için sürükle · Yaklaşmak için sıkıştır</p>
+      <div id="transition-shade" class="transition-shade"></div>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
