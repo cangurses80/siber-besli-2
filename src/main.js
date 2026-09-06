@@ -115,6 +115,7 @@ window.__WORLD_DIAGNOSTICS__ = {
   regionCount: worldData.regions.length,
   islandCount: worldData.islands.length,
   activeIslandInstances: world.activeIslands.length,
+  landmarkInstances: world.landmarks.counts,
   cameraTransitionMilliseconds: 800,
   debugMode,
 };
@@ -326,9 +327,9 @@ function handleWorldTap(clientX, clientY) {
   }
 
   if (modeId !== 'world') {
-    const islandHit = raycaster.intersectObject(world.tops, false)[0];
+    const islandHit = raycaster.intersectObjects(world.islandPickMeshes, false)[0];
     if (islandHit && Number.isInteger(islandHit.instanceId)) {
-      const islandId = world.tops.userData.islandIds[islandHit.instanceId];
+      const islandId = islandHit.object.userData.islandIds[islandHit.instanceId];
       focusIsland(islandId);
       return;
     }

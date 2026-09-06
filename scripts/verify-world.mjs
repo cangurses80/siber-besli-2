@@ -5,6 +5,7 @@ const world = JSON.parse(await readFile(new URL('../src/world.json', import.meta
 const regionIds = new Set(world.regions.map((region) => region.id));
 const islandIds = new Set(world.islands.map((island) => island.id));
 const bridgeIds = new Set();
+const landmarkTypes = new Set(['broken-column', 'tree', 'obelisk', 'arch']);
 
 assert.equal(world.regions.length, 6, 'Dünya tam olarak 6 bölge içermeli');
 assert.equal(regionIds.size, world.regions.length, 'Bölge ID değerleri benzersiz olmalı');
@@ -33,7 +34,15 @@ for (const island of world.islands) {
   assert.equal(island.puzzleType, null, `${island.id}: bu checkpoint'te puzzleType null olmalı`);
   assert.ok(Number.isInteger(island.difficulty) && island.difficulty >= 1 && island.difficulty <= 5, `${island.id}: difficulty 1–5 olmalı`);
   assert.ok(['player', 'fixed'].includes(island.seedMode), `${island.id}: geçersiz seedMode`);
+  assert.ok(landmarkTypes.has(island.landmark), `${island.id}: geçersiz veya eksik landmark`);
 }
+
+const tutorialLandmarks = new Set(
+  world.islands
+    .filter((island) => island.regionId === world.regions[0].id)
+    .map((island) => island.landmark),
+);
+assert.ok(tutorialLandmarks.size >= 3, 'Tutorial bölgesinde en az 3 landmark türü kullanılmalı');
 
 const islandById = new Map(world.islands.map((island) => [island.id, island]));
 for (const bridge of world.bridges) {
@@ -70,6 +79,7 @@ for (const bridge of world.regionBridges) {
   adjacency.get(bridge.from).push(bridge.to);
   adjacency.get(bridge.to).push(bridge.from);
 }
+assert.ok(world.regionBridges.every((bridge) => bridge.state === 'closed'), 'CP1 boyunca bütün bölge köprüleri kapalı olmalı');
 
 const visited = new Set();
 const queue = [world.regions[0].id];
@@ -90,6 +100,7 @@ console.log(`  Bölgeler: ${world.regions.length}`);
 console.log(`  Adalar: ${world.islands.length}`);
 console.log(`  Ada köprüleri: ${world.bridges.length}`);
 console.log(`  Bölge köprüleri: ${world.regionBridges.length}`);
+console.log(`  Tutorial landmark türleri (${tutorialLandmarks.size}): ${[...tutorialLandmarks].join(', ')}`);
 console.log(`  Tek dereceli bölgeler (${oddDegreeRegions.length}): ${oddDegreeRegions.join(', ')}`);
 
 function euclidean(a, b) {

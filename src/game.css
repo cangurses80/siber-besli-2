@@ -110,8 +110,9 @@ button { font: inherit; }
 .difficulty { flex: 0 0 auto; text-align: right; }
 .difficulty__dots { color: #ffd477; font-size: .87rem; letter-spacing: .1em; white-space: nowrap; }
 
-.gesture-hint { position: fixed; z-index: 14; bottom: 7px; left: 50%; width: 100%; margin: 0; color: rgba(229, 244, 238, .55); font-size: .61rem; text-align: center; transform: translateX(-50%); transition: opacity .3s; }
-body:not([data-mode="explore"]) .gesture-hint { opacity: 0; }
+.island-card__copy { min-width: 0; }
+.gesture-hint { margin: 5px 0 0; color: rgba(235, 250, 243, .86); font-size: .62rem; font-weight: 600; line-height: 1.25; text-shadow: 0 1px 5px rgba(0, 0, 0, .7); transition: opacity .3s; }
+body:not([data-mode="explore"]) .gesture-hint { display: none; }
 
 .toast {
   position: fixed;
@@ -164,7 +165,6 @@ body[data-mode="region"] .island-labels, body[data-mode="world"] .region-labels 
 @media (min-width: 760px) {
   .topbar { padding-right: 26px; padding-left: 26px; }
   .island-card { bottom: 28px; }
-  .gesture-hint { bottom: 11px; }
 }
 
 @media (max-width: 420px) {

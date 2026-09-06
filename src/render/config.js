@@ -1,13 +1,13 @@
 export const RENDER_CONFIG = {
   renderer: {
-    exposure: 1.08,
+    exposure: 1.0,
     pixelRatioCapDesktop: 1.65,
     pixelRatioCapMobile: 1.25,
   },
   bloom: {
-    threshold: 0.82,
-    strength: 0.72,
-    radius: 0.42,
+    threshold: 1.25,
+    strength: 0.34,
+    radius: 0.22,
     mobileResolutionScale: 0.62,
   },
   quality: {
@@ -16,8 +16,8 @@ export const RENDER_CONFIG = {
     cloudCountMobile: 10,
   },
   world: {
-    fogColor: 0x8db6ad,
-    fogDensity: 0.00165,
+    fogColor: 0xd08a70,
+    fogDensity: 0.00072,
   },
 };
 
