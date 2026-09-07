@@ -21,7 +21,9 @@ const transitionShade = document.querySelector('#transition-shade');
 const islandLabelsContainer = document.querySelector('#island-labels');
 const regionLabelsContainer = document.querySelector('#region-labels');
 
-const debugMode = new URLSearchParams(window.location.search).get('debug') === '1';
+const searchParams = new URLSearchParams(window.location.search);
+const debugMode = searchParams.get('debug') === '1';
+const cameraPresetId = searchParams.get('cam');
 const clock = new THREE.Clock();
 const placeholderScene = new THREE.Scene();
 const perspectiveCamera = new THREE.PerspectiveCamera(48, 1, 0.1, 1500);
@@ -33,7 +35,7 @@ worldCamera.up.set(0, 0, -1);
 
 const pipeline = createRenderPipeline(canvas, placeholderScene, perspectiveCamera);
 const textures = createWorldTextureLibrary(pipeline.renderer);
-const world = createWorldScene({ renderer: pipeline.renderer, textures, data: worldData });
+const world = createWorldScene({ renderer: pipeline.renderer, textures, data: worldData, debugMode });
 
 const controls = new OrbitControls(perspectiveCamera, canvas);
 controls.enableDamping = true;
@@ -57,6 +59,22 @@ const worldCenter = worldData.regions.reduce(
   (sum, region) => sum.add(new THREE.Vector3(...region.position)),
   new THREE.Vector3(),
 ).multiplyScalar(1 / worldData.regions.length);
+const CAMERA_PRESETS = {
+  'gate-top': {
+    modeId: 'explore',
+    islandId: 'helios-01',
+    positionOffset: new THREE.Vector3(28, 68, 30),
+    targetOffset: new THREE.Vector3(0, 0.4, 0),
+  },
+  'zeynep-side': {
+    modeId: 'explore',
+    islandId: 'helios-01',
+    positionOffset: new THREE.Vector3(62, 23, 43),
+    targetOffset: new THREE.Vector3(1.5, 3.2, -0.8),
+  },
+  region: { modeId: 'region' },
+  world: { modeId: 'world' },
+};
 
 let modeIndex = 0;
 let activeCamera = perspectiveCamera;
@@ -86,7 +104,10 @@ worldData.regions.forEach((region, index) => {
 document.body.dataset.mode = MODES[modeIndex].id;
 fpsElement.hidden = !debugMode;
 updateIslandCard(world.selectedIslandId);
+window.__CAMERA_PRESET_READY__ = false;
+window.__QA_FRAME_COUNT__ = 0;
 resize();
+applyCameraPreset(cameraPresetId);
 
 modeButton.addEventListener('click', () => {
   const nextIndex = (modeIndex + 1) % MODES.length;
@@ -110,14 +131,22 @@ world.ready
   });
 
 window.__WORLD_READY__ = false;
+const gl = pipeline.renderer.getContext();
+const rendererDebugInfo = gl.getExtension('WEBGL_debug_renderer_info');
 window.__WORLD_DIAGNOSTICS__ = {
   threeRevision: THREE.REVISION,
   regionCount: worldData.regions.length,
   islandCount: worldData.islands.length,
   activeIslandInstances: world.activeIslands.length,
   landmarkInstances: world.landmarks.counts,
+  islandGeometry: world.geometryDiagnostics,
+  bridgeGeometryChecks: world.bridgeGeometryChecks,
   cameraTransitionMilliseconds: 800,
   debugMode,
+  cameraPresetId,
+  renderer: rendererDebugInfo
+    ? gl.getParameter(rendererDebugInfo.UNMASKED_RENDERER_WEBGL)
+    : gl.getParameter(gl.RENDERER),
 };
 
 pipeline.renderer.setAnimationLoop(renderFrame);
@@ -131,10 +160,11 @@ function renderFrame() {
     controls.update();
     cameraTarget.copy(controls.target);
   }
-  world.update(elapsed, activeCamera);
+  world.update(cameraPresetId ? 2.25 : elapsed, activeCamera);
   updateLabels();
   updateFps(delta);
   pipeline.render(world.scene, activeCamera, delta);
+  window.__QA_FRAME_COUNT__ += 1;
 }
 
 function beginModeTransition(nextIndex) {
@@ -260,6 +290,50 @@ function getCamera(modeId) {
   return perspectiveCamera;
 }
 
+function applyCameraPreset(presetId) {
+  if (!presetId) {
+    window.__CAMERA_PRESET_READY__ = null;
+    return;
+  }
+  const preset = CAMERA_PRESETS[presetId];
+  if (!preset) {
+    console.warn(`[camera-preset] Bilinmeyen preset: ${presetId}`);
+    window.__CAMERA_PRESET_READY__ = 'invalid';
+    return;
+  }
+
+  const nextIndex = MODES.findIndex((mode) => mode.id === preset.modeId);
+  const mode = MODES[nextIndex];
+  modeIndex = nextIndex;
+  activeCamera = getCamera(mode.id);
+  cameraTransition = null;
+  currentRegionBlend = mode.regionBlend;
+  currentWorldBlend = mode.worldBlend;
+
+  if (preset.islandId) {
+    const islandPosition = world.getIslandPosition(preset.islandId);
+    cameraTarget.copy(islandPosition).add(preset.targetOffset);
+    activeCamera.position.copy(islandPosition).add(preset.positionOffset);
+  } else {
+    const destination = getCameraDestination(mode.id);
+    cameraTarget.copy(destination.target);
+    activeCamera.position.copy(destination.position);
+  }
+  activeCamera.lookAt(cameraTarget);
+  if (mode.id === 'explore') {
+    controls.target.copy(cameraTarget);
+    controls.update();
+  }
+
+  document.body.dataset.mode = mode.id;
+  modeLabel.textContent = mode.label;
+  modeIcon.textContent = mode.icon;
+  modeButton.setAttribute('aria-label', `Kamera modu: ${mode.label}`);
+  islandCard.classList.toggle('is-hidden', mode.id === 'world');
+  world.setMapBlend(currentRegionBlend, currentWorldBlend);
+  window.__CAMERA_PRESET_READY__ = presetId;
+}
+
 function resize() {
   const width = window.innerWidth;
   const height = Math.max(1, window.innerHeight);
@@ -313,6 +387,21 @@ function handleWorldTap(clientX, clientY) {
   const modeId = MODES[modeIndex].id;
 
   if (debugMode) {
+    const debugHits = raycaster.intersectObjects([
+      ...world.islandPickMeshes,
+      world.rings,
+      ...[...world.landmarks.meshes.values()].map(({ mesh }) => mesh),
+      ...world.bridgePickMeshes,
+      ...world.regionBridgePickMeshes,
+    ], false).filter((hit) => hit.object.visible && hit.object.parent?.visible !== false);
+    console.info(`[debug-hit] ${JSON.stringify(debugHits.slice(0, 8).map((hit) => ({
+      mesh: hit.object.name || hit.object.type,
+      bridgeId: hit.object.userData.bridgeVisual?.bridge.id || null,
+      instanceId: Number.isInteger(hit.instanceId) ? hit.instanceId : null,
+      distance: Number(hit.distance.toFixed(3)),
+    })))}`);
+    if (cameraPresetId) return;
+
     const bridgeMeshes = modeId === 'world'
       ? world.regionBridgePickMeshes
       : [...world.bridgePickMeshes, ...world.regionBridgePickMeshes];

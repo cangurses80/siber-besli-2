@@ -12,7 +12,26 @@ const PALETTES = {
   veda: { top: 0x726d9b, rock: 0x403c55, glow: 0xf28da8, node: 0x77719b },
 };
 
-export function createWorldScene({ renderer, textures, data }) {
+const ISLAND_RADIUS_SCALE = 1.6;
+const ORIGINAL_START_ISLAND_RADIUS = 9.5;
+const ISLAND_RIM_HEIGHT = 0.32;
+const ISLAND_RIM_CENTER_Y = -0.12;
+const ISLAND_TOP_LOCAL_Y = ISLAND_RIM_CENTER_Y + ISLAND_RIM_HEIGHT / 2;
+const ISLAND_UNDERSIDE_HEIGHT = 1.85;
+const ISLAND_UNDERSIDE_CENTER_Y = -1.18;
+const ISLAND_BOTTOM_LOCAL_Y = ISLAND_UNDERSIDE_CENTER_Y - ISLAND_UNDERSIDE_HEIGHT / 2;
+const STONE_BAND_INNER_RADIUS = 0.82;
+const GRASS_DISC_RADIUS = 0.83;
+const GRASS_SURFACE_LIFT = 0.02;
+const RING_MAJOR_RADIUS = 1.04;
+const RING_TUBE_RADIUS = 0.022;
+const RING_SURFACE_LIFT = 0.15;
+const ISLAND_BRIDGE_RADIUS = 0.23;
+const BRIDGE_SURFACE_CLEARANCE = 0.25;
+const BRIDGE_EDGE_CLEARANCE = 1.05;
+const BRIDGE_CONTROL_OFFSET = 4;
+
+export function createWorldScene({ renderer, textures, data, debugMode = false }) {
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(RENDER_CONFIG.world.fogColor, RENDER_CONFIG.world.fogDensity);
   const activeRegion = data.regions[0];
@@ -28,13 +47,12 @@ export function createWorldScene({ renderer, textures, data }) {
   createClouds(scene, resources);
 
   const islandGeometry = createIslandBodyGeometry();
-  const stoneTopGeometry = new THREE.CylinderGeometry(1, 0.94, 0.3, 12, 1, false);
-  stoneTopGeometry.translate(0, 0.05, 0);
-  const grassTopGeometry = new THREE.CylinderGeometry(0.77, 0.79, 0.14, 14, 1, false);
-  grassTopGeometry.translate(0, 0.24, 0);
-  const ringGeometry = new THREE.TorusGeometry(1.035, 0.022, 4, 36);
+  const stoneTopGeometry = new THREE.RingGeometry(STONE_BAND_INNER_RADIUS, 1, 24, 1);
+  stoneTopGeometry.rotateX(-Math.PI / 2);
+  const grassTopGeometry = new THREE.CircleGeometry(GRASS_DISC_RADIUS, 24);
+  grassTopGeometry.rotateX(-Math.PI / 2);
+  const ringGeometry = new THREE.TorusGeometry(RING_MAJOR_RADIUS, RING_TUBE_RADIUS, 4, 36);
   ringGeometry.rotateX(Math.PI / 2);
-  ringGeometry.translate(0, 0.21, 0);
   resources.geometries.push(islandGeometry, stoneTopGeometry, grassTopGeometry, ringGeometry);
 
   const palette = PALETTES[activeRegion.id];
@@ -55,10 +73,12 @@ export function createWorldScene({ renderer, textures, data }) {
     transparent: true,
   });
   const grassTopMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
+    color: palette.grass,
     roughness: 0.9,
     metalness: 0,
     transparent: true,
+    depthTest: true,
+    depthWrite: true,
   });
   const ringMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -80,6 +100,10 @@ export function createWorldScene({ renderer, textures, data }) {
   stoneTops.name = 'Tutorial island PBR stone bands (instanced)';
   tops.name = 'Tutorial island moss centers (instanced)';
   rings.name = 'Tutorial island emissive rims (instanced)';
+  bodies.renderOrder = 0;
+  stoneTops.renderOrder = 1;
+  tops.renderOrder = 2;
+  rings.renderOrder = 3;
   bodies.castShadow = true;
   bodies.receiveShadow = true;
   stoneTops.castShadow = true;
@@ -102,44 +126,64 @@ export function createWorldScene({ renderer, textures, data }) {
     islandWorldPositions.set(island.id, base.clone());
     const phase = hashUnit(island.id) * Math.PI * 2;
     rings.setColorAt(index, new THREE.Color(palette.glow));
-    const grassColor = new THREE.Color(palette.grass);
-    grassColor.offsetHSL(
-      (hashUnit(`${island.id}-hue`) - 0.5) * 0.012,
-      (hashUnit(`${island.id}-sat`) - 0.5) * 0.03,
-      (hashUnit(`${island.id}-light`) - 0.5) * 0.05,
-    );
-    tops.setColorAt(index, grassColor);
     return {
       island,
       base,
       phase,
       bob: 0,
+      rotation: phase * 0.11,
       scaleX: 0.94 + hashUnit(`${island.id}-x`) * 0.12,
       scaleZ: 0.94 + hashUnit(`${island.id}-z`) * 0.12,
     };
   });
   rings.instanceColor.needsUpdate = true;
-  tops.instanceColor.needsUpdate = true;
   const islandAnimationById = new Map(islandAnimation.map((item) => [item.island.id, item]));
+  const geometryDiagnostics = createIslandGeometryDiagnostics({
+    islandGeometry,
+    stoneTopGeometry,
+    grassTopGeometry,
+    grassTopMaterial,
+    bodies,
+    stoneTops,
+    tops,
+    animation: islandAnimation[0],
+  });
+  if (debugMode) console.info(`[geometry-qa] ${JSON.stringify(geometryDiagnostics)}`);
   const landmarks = createLandmarkSystem({ scene, activeIslands, islandAnimationById, resources });
 
   const bridgeMaterials = createBridgeMaterials(palette, resources);
   const bridgeVisuals = [];
   const bridgePickMeshes = [];
+  const bridgeGeometryChecks = [];
   const activeIslandBridges = data.bridges.filter((bridge) => islandById.get(bridge.from)?.regionId === activeRegion.id);
   activeIslandBridges.forEach((bridge) => {
-    const from = islandWorldPositions.get(bridge.from);
-    const to = islandWorldPositions.get(bridge.to);
+    const fromAnimation = islandAnimationById.get(bridge.from);
+    const toAnimation = islandAnimationById.get(bridge.to);
+    const curvePoints = createIslandBridgeCurvePoints(
+      fromAnimation,
+      toAnimation,
+      4.8,
+      ISLAND_BRIDGE_RADIUS,
+    );
     const visual = createBridgeVisual({
       bridge,
-      from: from.clone().add(new THREE.Vector3(0, 0.3, 0)),
-      to: to.clone().add(new THREE.Vector3(0, 0.3, 0)),
-      radius: 0.23,
+      from: curvePoints[0],
+      to: curvePoints[curvePoints.length - 1],
+      curvePoints,
+      radius: ISLAND_BRIDGE_RADIUS,
       openMaterial: bridgeMaterials.islandOpen,
       closedMaterial: bridgeMaterials.islandClosed,
       sag: 4.8,
       tubularSegments: 28,
+      endpointAnimations: [fromAnimation, toAnimation],
     });
+    bridgeGeometryChecks.push(validateIslandBridgeCurve({
+      bridge,
+      curve: visual.curve,
+      endpointAnimations: [fromAnimation, toAnimation],
+      sampleCount: 32,
+      debugMode,
+    }));
     scene.add(visual.group);
     bridgeVisuals.push(visual);
     bridgePickMeshes.push(...visual.pickMeshes);
@@ -174,7 +218,11 @@ export function createWorldScene({ renderer, textures, data }) {
   });
 
   const zeynep = createCharacter('Zeynep', 'front', { resources });
-  zeynep.scale.setScalar(6.3);
+  const startIsland = activeIslands[0];
+  const startIslandScale = startIsland.radius / ORIGINAL_START_ISLAND_RADIUS;
+  const zeynepScale = startIsland.radius * (6.3 / ORIGINAL_START_ISLAND_RADIUS);
+  const zeynepOffset = new THREE.Vector2(2.8, -1.6).multiplyScalar(startIslandScale);
+  zeynep.scale.setScalar(zeynepScale);
   const contactShadowGeometry = new THREE.CircleGeometry(1, 24);
   contactShadowGeometry.rotateX(-Math.PI / 2);
   const contactShadowMaterial = new THREE.MeshBasicMaterial({
@@ -186,7 +234,7 @@ export function createWorldScene({ renderer, textures, data }) {
   });
   const contactShadow = new THREE.Mesh(contactShadowGeometry, contactShadowMaterial);
   contactShadow.name = 'Zeynep soft contact shadow';
-  contactShadow.scale.set(2.7, 2.7, 2.7);
+  contactShadow.scale.setScalar(startIsland.radius * (2.7 / ORIGINAL_START_ISLAND_RADIUS));
   contactShadow.renderOrder = 2;
   resources.geometries.push(contactShadowGeometry);
   resources.materials.push(contactShadowMaterial);
@@ -209,40 +257,54 @@ export function createWorldScene({ renderer, textures, data }) {
     lighting.update(activeCamera);
     islandAnimation.forEach((item, index) => {
       item.bob = Math.sin(elapsedSeconds * 0.72 + item.phase) * 0.3;
-      const radius = item.island.radius;
-      baseMatrix.position.set(item.base.x, item.base.y + item.bob, item.base.z);
-      baseMatrix.rotation.set(0, item.phase * 0.11, 0);
+      const centerY = getIslandCenterY(item);
+      const topY = getIslandTopY(item);
+      const { radiusX, radiusZ } = getIslandRimAxes(item);
+      baseMatrix.position.set(item.base.x, centerY, item.base.z);
+      baseMatrix.rotation.set(0, item.rotation, 0);
       baseMatrix.scale.set(
-        radius * item.scaleX,
-        Math.max(4.8, radius * 0.72),
-        radius * item.scaleZ,
+        radiusX,
+        getIslandBodyScaleY(item),
+        radiusZ,
       );
       baseMatrix.updateMatrix();
       bodies.setMatrixAt(index, baseMatrix.matrix);
 
-      baseMatrix.position.y = item.base.y + item.bob;
-      baseMatrix.scale.set(radius * 0.97 * item.scaleX, 1, radius * 0.97 * item.scaleZ);
+      baseMatrix.position.y = topY;
+      baseMatrix.scale.set(radiusX, 1, radiusZ);
       baseMatrix.updateMatrix();
       stoneTops.setMatrixAt(index, baseMatrix.matrix);
 
-      baseMatrix.scale.set(radius * 0.98 * item.scaleX, 1, radius * 0.98 * item.scaleZ);
+      baseMatrix.position.y = topY + GRASS_SURFACE_LIFT;
       baseMatrix.updateMatrix();
       tops.setMatrixAt(index, baseMatrix.matrix);
 
-      baseMatrix.scale.set(radius * item.scaleX, radius, radius * item.scaleZ);
+      baseMatrix.position.y = topY + RING_SURFACE_LIFT;
+      baseMatrix.scale.set(radiusX, (radiusX + radiusZ) / 2, radiusZ);
       baseMatrix.updateMatrix();
       rings.setMatrixAt(index, baseMatrix.matrix);
-      islandWorldPositions.get(item.island.id).set(item.base.x, item.base.y + item.bob, item.base.z);
+      islandWorldPositions.get(item.island.id).set(item.base.x, centerY, item.base.z);
     });
     bodies.instanceMatrix.needsUpdate = true;
     stoneTops.instanceMatrix.needsUpdate = true;
     tops.instanceMatrix.needsUpdate = true;
     rings.instanceMatrix.needsUpdate = true;
     landmarks.update(detailOpacity);
+    bridgeVisuals.forEach((visual) => visual.updateEndpointMotion());
 
-    const start = islandWorldPositions.get(activeIslands[0].id);
-    zeynep.position.set(start.x + 2.8, start.y + 0.34, start.z - 1.6);
-    contactShadow.position.set(start.x + 2.8, start.y + 0.325, start.z - 1.6);
+    const startAnimation = islandAnimation[0];
+    const start = islandWorldPositions.get(startIsland.id);
+    const startTopY = getIslandTopY(startAnimation);
+    zeynep.position.set(
+      start.x + zeynepOffset.x,
+      startTopY + 0.03,
+      start.z + zeynepOffset.y,
+    );
+    contactShadow.position.set(
+      start.x + zeynepOffset.x,
+      startTopY + 0.015,
+      start.z + zeynepOffset.y,
+    );
     zeynep.visible = detailOpacity > 0.42;
     contactShadow.visible = zeynep.visible;
     contactShadowMaterial.opacity = 0.3 * detailOpacity;
@@ -260,7 +322,7 @@ export function createWorldScene({ renderer, textures, data }) {
     ringMaterial.opacity = 0.96 - regionBlend * 0.18 - worldBlend * 0.5;
 
     bridgeVisuals.forEach((visual) => visual.setOpacity(1 - worldBlend * 0.62));
-    regionBridgeVisuals.forEach((visual) => visual.setOpacity(0.08 + worldBlend * 0.92));
+    regionBridgeVisuals.forEach((visual) => visual.setOpacity(worldBlend));
     data.regions.forEach((region, index) => {
       const node = regionNodes.get(region.id);
       if (index === 0) {
@@ -297,10 +359,12 @@ export function createWorldScene({ renderer, textures, data }) {
     islandPickMeshes: [tops, stoneTops, bodies],
     rings,
     landmarks,
+    geometryDiagnostics,
     islandWorldPositions,
     bridgePickMeshes,
     regionBridgePickMeshes,
     bridgeVisuals,
+    bridgeGeometryChecks,
     regionBridgeVisuals,
     ready,
     update,
@@ -319,11 +383,11 @@ export function createWorldScene({ renderer, textures, data }) {
 }
 
 function createIslandBodyGeometry() {
-  const rim = new THREE.CylinderGeometry(1, 0.9, 0.32, 10, 1, false);
-  rim.translate(0, -0.12, 0);
-  const underside = new THREE.ConeGeometry(0.9, 1.85, 10, 2, false);
+  const rim = new THREE.CylinderGeometry(1, 0.9, ISLAND_RIM_HEIGHT, 10, 1, true);
+  rim.translate(0, ISLAND_RIM_CENTER_Y, 0);
+  const underside = new THREE.ConeGeometry(0.9, ISLAND_UNDERSIDE_HEIGHT, 10, 2, true);
   underside.rotateZ(Math.PI);
-  underside.translate(0, -1.18, 0);
+  underside.translate(0, ISLAND_UNDERSIDE_CENTER_Y, 0);
   const geometry = mergeGeometries([rim, underside], false);
   rim.dispose();
   underside.dispose();
@@ -334,21 +398,73 @@ function createIslandBodyGeometry() {
     const z = position.getZ(index);
     const angle = Math.atan2(z, x);
     const depth = THREE.MathUtils.clamp(-y / 2.12, 0, 1);
-    const edgeNoise = Math.sin(angle * 3 + 0.71) * 0.075
-      + Math.sin(angle * 7 - 1.38) * 0.038
-      + Math.sin(y * 4.7 + angle * 2) * 0.025;
+    const edgeNoise = Math.sin(angle * 3 + 0.71) * 0.15
+      + Math.sin(angle * 7 - 1.38) * 0.076
+      + Math.sin(y * 4.7 + angle * 2) * 0.05;
     const taperWarp = 1 + edgeNoise * (0.35 + depth * 0.65);
     position.setXYZ(
       index,
-      x * taperWarp + depth * 0.16,
+      x * taperWarp + depth * 0.32,
       y,
-      z * taperWarp - depth * 0.1,
+      z * taperWarp - depth * 0.2,
     );
   }
   position.needsUpdate = true;
   geometry.computeVertexNormals();
   geometry.normalizeNormals();
   return geometry;
+}
+
+function createIslandGeometryDiagnostics({
+  islandGeometry,
+  stoneTopGeometry,
+  grassTopGeometry,
+  grassTopMaterial,
+  bodies,
+  stoneTops,
+  tops,
+  animation,
+}) {
+  const bodyPosition = islandGeometry.getAttribute('position');
+  let bodyMaxLocalY = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < bodyPosition.count; index += 1) {
+    bodyMaxLocalY = Math.max(bodyMaxLocalY, bodyPosition.getY(index));
+  }
+  const topY = getIslandTopY(animation);
+  return {
+    bodyVertexCount: bodyPosition.count,
+    bodyMaxLocalY,
+    bodyMaxWorldY: getIslandCenterY(animation) + bodyMaxLocalY * getIslandBodyScaleY(animation),
+    bodyHorizontalTopTriangles: countHorizontalTopTriangles(islandGeometry, bodyMaxLocalY),
+    stoneVertexCount: stoneTopGeometry.getAttribute('position').count,
+    stoneWorldY: topY,
+    grassVertexCount: grassTopGeometry.getAttribute('position').count,
+    grassWorldY: topY + GRASS_SURFACE_LIFT,
+    grassColor: `0x${grassTopMaterial.color.getHexString()}`,
+    grassDepthTest: grassTopMaterial.depthTest,
+    grassDepthWrite: grassTopMaterial.depthWrite,
+    renderOrder: {
+      body: bodies.renderOrder,
+      stone: stoneTops.renderOrder,
+      grass: tops.renderOrder,
+    },
+  };
+}
+
+function countHorizontalTopTriangles(geometry, topY) {
+  const position = geometry.getAttribute('position');
+  const index = geometry.getIndex();
+  const triangleCount = index ? index.count / 3 : position.count / 3;
+  let horizontalTriangles = 0;
+  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+    const vertexIndices = [0, 1, 2].map((offset) => (
+      index ? index.getX(triangle * 3 + offset) : triangle * 3 + offset
+    ));
+    if (vertexIndices.every((vertexIndex) => Math.abs(position.getY(vertexIndex) - topY) < 1e-6)) {
+      horizontalTriangles += 1;
+    }
+  }
+  return horizontalTriangles;
 }
 
 function createLandmarkSystem({ scene, activeIslands, islandAnimationById, resources }) {
@@ -394,7 +510,7 @@ function createLandmarkSystem({ scene, activeIslands, islandAnimationById, resou
     const angle = hashUnit(`${island.id}-landmark-angle`) * Math.PI * 2;
     const distance = island.radius * (0.2 + hashUnit(`${island.id}-landmark-distance`) * 0.11);
     const offset = island.id === 'helios-01'
-      ? new THREE.Vector2(-2.7, 1.8)
+      ? new THREE.Vector2(-2.7, 1.8).multiplyScalar(island.radius / ORIGINAL_START_ISLAND_RADIUS)
       : new THREE.Vector2(Math.cos(angle) * distance, Math.sin(angle) * distance);
     entriesByType.get(island.landmark).push({
       island,
@@ -402,6 +518,7 @@ function createLandmarkSystem({ scene, activeIslands, islandAnimationById, resou
       offset,
       rotation: hashUnit(`${island.id}-landmark-rotation`) * Math.PI * 2,
       size: 0.92 + hashUnit(`${island.id}-landmark-size`) * 0.16,
+      originalRadius: island.radius / ISLAND_RADIUS_SCALE,
     });
   });
 
@@ -428,14 +545,14 @@ function createLandmarkSystem({ scene, activeIslands, islandAnimationById, resou
     for (const { mesh, entries, definition } of meshes.values()) {
       definition.material.opacity = opacity;
       entries.forEach((entry, index) => {
-        const { base, bob } = entry.animation;
+        const { base } = entry.animation;
         dummy.position.set(
           base.x + entry.offset.x,
-          base.y + bob + 0.33,
+          getIslandTopY(entry.animation) + 0.02,
           base.z + entry.offset.y,
         );
         dummy.rotation.set(0, entry.rotation, 0);
-        const scale = definition.scale * entry.size;
+        const scale = definition.scale * entry.size * (entry.island.radius / entry.originalRadius);
         dummy.scale.set(scale, scale, scale);
         dummy.updateMatrix();
         mesh.setMatrixAt(index, dummy.matrix);
@@ -578,19 +695,138 @@ function createBridgeMaterials(palette, resources) {
   return { islandOpen, islandClosed, regionOpen, regionClosed };
 }
 
-function createBridgeVisual({ bridge, from, to, radius, openMaterial, closedMaterial, sag, tubularSegments }) {
+function getIslandCenterY(animation) {
+  return animation.base.y + animation.bob;
+}
+
+function getIslandBodyScaleY(animation) {
+  return Math.max(4.8, animation.island.radius * 0.72);
+}
+
+function getIslandTopY(animation) {
+  return getIslandCenterY(animation) + ISLAND_TOP_LOCAL_Y * getIslandBodyScaleY(animation);
+}
+
+function getIslandRimAxes(animation) {
+  return {
+    radiusX: animation.island.radius * animation.scaleX,
+    radiusZ: animation.island.radius * animation.scaleZ,
+  };
+}
+
+function getIslandRimRadiusInDirection(animation, worldDirection) {
+  const { rotation } = animation;
+  const { radiusX, radiusZ } = getIslandRimAxes(animation);
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const localDirectionX = cos * worldDirection.x - sin * worldDirection.z;
+  const localDirectionZ = sin * worldDirection.x + cos * worldDirection.z;
+  return 1 / Math.sqrt(
+    (localDirectionX * localDirectionX) / (radiusX * radiusX)
+      + (localDirectionZ * localDirectionZ) / (radiusZ * radiusZ),
+  );
+}
+
+function createIslandBridgeCurvePoints(fromAnimation, toAnimation, sag, tubeRadius) {
+  const horizontalDirection = toAnimation.base.clone().sub(fromAnimation.base);
+  horizontalDirection.y = 0;
+  if (horizontalDirection.lengthSq() === 0) horizontalDirection.set(1, 0, 0);
+  horizontalDirection.normalize();
+
+  const startEdge = getIslandBridgeEdge(fromAnimation, horizontalDirection, tubeRadius);
+  const endEdge = getIslandBridgeEdge(toAnimation, horizontalDirection.clone().negate(), tubeRadius);
+  const distance = startEdge.distanceTo(endEdge);
+  const sagDepth = Math.min(sag, distance * 0.13);
+  const saggingMidpoint = startEdge.clone().lerp(endEdge, 0.5);
+  saggingMidpoint.y -= sagDepth;
+
+  return [
+    startEdge,
+    startEdge.clone().addScaledVector(horizontalDirection, BRIDGE_CONTROL_OFFSET),
+    saggingMidpoint,
+    endEdge.clone().addScaledVector(horizontalDirection, -BRIDGE_CONTROL_OFFSET),
+    endEdge,
+  ];
+}
+
+function getIslandBridgeEdge(animation, outwardDirection, tubeRadius) {
+  const effectiveRadius = getIslandRimRadiusInDirection(animation, outwardDirection);
+  return animation.base.clone()
+    .addScaledVector(outwardDirection, effectiveRadius * BRIDGE_EDGE_CLEARANCE)
+    .setY(getIslandTopY(animation) + tubeRadius + BRIDGE_SURFACE_CLEARANCE);
+}
+
+function validateIslandBridgeCurve({ bridge, curve, endpointAnimations, sampleCount, debugMode }) {
+  let minimumClearance = Number.POSITIVE_INFINITY;
+  const violations = [];
+  for (let sampleIndex = 0; sampleIndex <= sampleCount; sampleIndex += 1) {
+    const point = curve.getPoint(sampleIndex / sampleCount);
+    endpointAnimations.forEach((animation) => {
+      const clearance = getIslandVolumeClearance(point, animation, ISLAND_BRIDGE_RADIUS);
+      minimumClearance = Math.min(minimumClearance, clearance);
+      if (clearance < 0) {
+        violations.push({ islandId: animation.island.id, sampleIndex, clearance });
+      }
+    });
+  }
+  if (debugMode && violations.length > 0) {
+    violations.forEach(({ islandId, sampleIndex, clearance }) => {
+      console.warn(
+        `[bridge-clearance] ${bridge.id} / ${islandId} / örnek ${sampleIndex}: ${clearance.toFixed(3)} birim ihlal`,
+      );
+    });
+  }
+  return { bridgeId: bridge.id, sampleCount, minimumClearance, violations: violations.length };
+}
+
+function getIslandVolumeClearance(point, animation, tubeRadius) {
+  const { radiusX, radiusZ } = getIslandRimAxes(animation);
+  const cos = Math.cos(animation.rotation);
+  const sin = Math.sin(animation.rotation);
+  const worldX = point.x - animation.base.x;
+  const worldZ = point.z - animation.base.z;
+  const localX = cos * worldX - sin * worldZ;
+  const localZ = sin * worldX + cos * worldZ;
+  const expandedRadiusX = radiusX + tubeRadius;
+  const expandedRadiusZ = radiusZ + tubeRadius;
+  const normalizedDistance = Math.sqrt(
+    (localX * localX) / (expandedRadiusX * expandedRadiusX)
+      + (localZ * localZ) / (expandedRadiusZ * expandedRadiusZ),
+  );
+  const horizontalClearance = (normalizedDistance - 1) * Math.min(expandedRadiusX, expandedRadiusZ);
+  const topClearance = point.y - (getIslandTopY(animation) + tubeRadius);
+  const bodyBottomY = getIslandCenterY(animation) + ISLAND_BOTTOM_LOCAL_Y * getIslandBodyScaleY(animation);
+  const bottomClearance = bodyBottomY - tubeRadius - point.y;
+  return Math.max(horizontalClearance, topClearance, bottomClearance);
+}
+
+function createBridgeVisual({
+  bridge,
+  from,
+  to,
+  curvePoints,
+  radius,
+  openMaterial,
+  closedMaterial,
+  sag,
+  tubularSegments,
+  endpointAnimations = null,
+}) {
   const group = new THREE.Group();
   group.name = bridge.id;
   const distance = from.distanceTo(to);
   const direction = to.clone().sub(from);
-  const points = [
+  const points = curvePoints || [
     from,
     from.clone().addScaledVector(direction, 0.32).add(new THREE.Vector3(0, -Math.min(sag, distance * 0.13), 0)),
     from.clone().addScaledVector(direction, 0.68).add(new THREE.Vector3(0, -Math.min(sag, distance * 0.13), 0)),
     to,
   ];
   const curve = new THREE.CatmullRomCurve3(points, false, 'centripetal');
-  const openMesh = new THREE.Mesh(new THREE.TubeGeometry(curve, tubularSegments, radius, 5, false), openMaterial);
+  const radialSegments = 5;
+  const openGeometry = new THREE.TubeGeometry(curve, tubularSegments, radius, radialSegments, false);
+  addBridgeProgressAttribute(openGeometry, 0, 1, tubularSegments, radialSegments);
+  const openMesh = new THREE.Mesh(openGeometry, openMaterial);
   openMesh.name = `${bridge.id} open tube`;
   group.add(openMesh);
 
@@ -601,20 +837,21 @@ function createBridgeVisual({ bridge, from, to, radius, openMaterial, closedMate
     const startT = index / dashCount;
     const endT = Math.min(1, startT + 0.58 / dashCount);
     const middleT = (startT + endT) / 2;
+    const dashTubularSegments = Math.max(3, Math.floor(tubularSegments / dashCount));
     const segmentCurve = new THREE.CatmullRomCurve3([
       curve.getPoint(startT),
       curve.getPoint(middleT),
       curve.getPoint(endT),
     ], false, 'centripetal');
-    closedSegmentGeometries.push(
-      new THREE.TubeGeometry(
-        segmentCurve,
-        Math.max(3, Math.floor(tubularSegments / dashCount)),
-        closedRadius,
-        5,
-        false,
-      ),
+    const dashGeometry = new THREE.TubeGeometry(
+      segmentCurve,
+      dashTubularSegments,
+      closedRadius,
+      radialSegments,
+      false,
     );
+    addBridgeProgressAttribute(dashGeometry, startT, endT, dashTubularSegments, radialSegments);
+    closedSegmentGeometries.push(dashGeometry);
   }
   const closedGeometry = mergeGeometries(closedSegmentGeometries, false);
   closedSegmentGeometries.forEach((geometry) => geometry.dispose());
@@ -624,9 +861,12 @@ function createBridgeVisual({ bridge, from, to, radius, openMaterial, closedMate
 
   const state = { value: bridge.state };
   const pickMeshes = [openMesh, closedMesh];
+  const openDeformer = createBridgeVerticalDeformer(openGeometry);
+  const closedDeformer = createBridgeVerticalDeformer(closedGeometry);
   const visual = {
     group,
     bridge,
+    curve,
     pickMeshes,
     get state() { return state.value; },
     toggle() { this.setState(state.value === 'open' ? 'closed' : 'open'); },
@@ -634,6 +874,12 @@ function createBridgeVisual({ bridge, from, to, radius, openMaterial, closedMate
       state.value = nextState;
       openMesh.visible = nextState === 'open';
       closedMesh.visible = nextState === 'closed';
+    },
+    updateEndpointMotion() {
+      if (!endpointAnimations) return;
+      const [fromAnimation, toAnimation] = endpointAnimations;
+      openDeformer.update(fromAnimation.bob, toAnimation.bob);
+      closedDeformer.update(fromAnimation.bob, toAnimation.bob);
     },
     setOpacity(amount) {
       group.visible = amount > 0.01;
@@ -644,13 +890,39 @@ function createBridgeVisual({ bridge, from, to, radius, openMaterial, closedMate
       closedMesh.material.opacity = THREE.MathUtils.clamp(amount, 0.04, 1);
     },
     dispose() {
-      openMesh.geometry.dispose();
+      openGeometry.dispose();
       closedGeometry.dispose();
     },
   };
   pickMeshes.forEach((mesh) => { mesh.userData.bridgeVisual = visual; });
   visual.setState(bridge.state);
   return visual;
+}
+
+function addBridgeProgressAttribute(geometry, startT, endT, tubularSegments, radialSegments) {
+  const rowSize = radialSegments + 1;
+  const progress = new Float32Array(geometry.getAttribute('position').count);
+  for (let index = 0; index < progress.length; index += 1) {
+    const row = Math.min(tubularSegments, Math.floor(index / rowSize));
+    progress[index] = THREE.MathUtils.lerp(startT, endT, row / tubularSegments);
+  }
+  geometry.setAttribute('bridgeProgress', new THREE.BufferAttribute(progress, 1));
+}
+
+function createBridgeVerticalDeformer(geometry) {
+  const position = geometry.getAttribute('position');
+  const progress = geometry.getAttribute('bridgeProgress');
+  const baseY = new Float32Array(position.count);
+  for (let index = 0; index < position.count; index += 1) baseY[index] = position.getY(index);
+
+  return {
+    update(fromBob, toBob) {
+      for (let index = 0; index < position.count; index += 1) {
+        position.setY(index, baseY[index] + THREE.MathUtils.lerp(fromBob, toBob, progress.getX(index)));
+      }
+      position.needsUpdate = true;
+    },
+  };
 }
 
 function createRegionNode(region, active, resources) {
