@@ -34,168 +34,46 @@ const BRIDGE_CONTROL_OFFSET = 4;
 export function createWorldScene({ renderer, textures, data, debugMode = false }) {
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(RENDER_CONFIG.world.fogColor, RENDER_CONFIG.world.fogDensity);
-  const activeRegion = data.regions[0];
-  const activeIslands = activeRegion.islands.map((id) => data.islands.find((island) => island.id === id));
   const islandById = new Map(data.islands.map((island) => [island.id, island]));
   const regionById = new Map(data.regions.map((region) => [region.id, region]));
+  const globalResources = { geometries: [], materials: [], textures: [] };
   const islandWorldPositions = new Map();
-  const resources = { geometries: [], materials: [], textures: [] };
+  const bridgeStateOverrides = new Map(
+    [...data.bridges, ...data.regionBridges].map((bridge) => [bridge.id, bridge.state]),
+  );
+  let reachableRegionIds = new Set([data.regions[0].id]);
+  let detailedRegion = null;
+  let selectedIslandId = data.regions[0].islands[0];
+  let detailOpacity = 1;
+  let regionBlend = 0;
+  let worldBlend = 0;
+  let characterIslandId = selectedIslandId;
+  let characterMove = null;
 
-  createSky(scene, resources);
-  createMist(scene, resources);
+  createSky(scene, globalResources);
+  createMist(scene, globalResources);
   const lighting = createLights(scene);
-  createClouds(scene, resources);
+  createClouds(scene, globalResources);
 
-  const islandGeometry = createIslandBodyGeometry();
-  const stoneTopGeometry = new THREE.RingGeometry(STONE_BAND_INNER_RADIUS, 1, 24, 1);
-  stoneTopGeometry.rotateX(-Math.PI / 2);
-  const grassTopGeometry = new THREE.CircleGeometry(GRASS_DISC_RADIUS, 24);
-  grassTopGeometry.rotateX(-Math.PI / 2);
-  const ringGeometry = new THREE.TorusGeometry(RING_MAJOR_RADIUS, RING_TUBE_RADIUS, 4, 36);
-  ringGeometry.rotateX(Math.PI / 2);
-  resources.geometries.push(islandGeometry, stoneTopGeometry, grassTopGeometry, ringGeometry);
-
-  const palette = PALETTES[activeRegion.id];
-  const bodyMaterial = new THREE.MeshStandardMaterial({
-    color: palette.rock,
-    roughness: 0.82,
-    metalness: 0,
-    flatShading: true,
-    transparent: true,
-  });
-  const stoneTopMaterial = new THREE.MeshStandardMaterial({
-    color: 0xcfc4b0,
-    map: textures.stone.color,
-    normalMap: textures.stone.normal,
-    roughnessMap: textures.stone.roughness,
-    roughness: 0.82,
-    metalness: 0,
-    transparent: true,
-  });
-  const grassTopMaterial = new THREE.MeshStandardMaterial({
-    color: palette.grass,
-    roughness: 0.9,
-    metalness: 0,
-    transparent: true,
-    depthTest: true,
-    depthWrite: true,
-  });
-  const ringMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    emissive: palette.glow,
-    emissiveIntensity: 1.35,
-    roughness: 0.4,
-    metalness: 0.02,
-    transparent: true,
-    opacity: 0.96,
-    toneMapped: false,
-  });
-  resources.materials.push(bodyMaterial, stoneTopMaterial, grassTopMaterial, ringMaterial);
-
-  const bodies = new THREE.InstancedMesh(islandGeometry, bodyMaterial, activeIslands.length);
-  const stoneTops = new THREE.InstancedMesh(stoneTopGeometry, stoneTopMaterial, activeIslands.length);
-  const tops = new THREE.InstancedMesh(grassTopGeometry, grassTopMaterial, activeIslands.length);
-  const rings = new THREE.InstancedMesh(ringGeometry, ringMaterial, activeIslands.length);
-  bodies.name = 'Tutorial island bodies (instanced)';
-  stoneTops.name = 'Tutorial island PBR stone bands (instanced)';
-  tops.name = 'Tutorial island moss centers (instanced)';
-  rings.name = 'Tutorial island emissive rims (instanced)';
-  bodies.renderOrder = 0;
-  stoneTops.renderOrder = 1;
-  tops.renderOrder = 2;
-  rings.renderOrder = 3;
-  bodies.castShadow = true;
-  bodies.receiveShadow = true;
-  stoneTops.castShadow = true;
-  stoneTops.receiveShadow = true;
-  tops.castShadow = true;
-  tops.receiveShadow = true;
-  bodies.frustumCulled = false;
-  stoneTops.frustumCulled = false;
-  tops.frustumCulled = false;
-  rings.frustumCulled = false;
-  bodies.userData.islandIds = activeIslands.map((island) => island.id);
-  stoneTops.userData.islandIds = activeIslands.map((island) => island.id);
-  tops.userData.islandIds = activeIslands.map((island) => island.id);
-  rings.userData.islandIds = activeIslands.map((island) => island.id);
-  scene.add(bodies, stoneTops, tops, rings);
-
-  const baseMatrix = new THREE.Object3D();
-  const islandAnimation = activeIslands.map((island, index) => {
-    const base = vectorFrom(island.localPosition).add(vectorFrom(activeRegion.position));
-    islandWorldPositions.set(island.id, base.clone());
-    const phase = hashUnit(island.id) * Math.PI * 2;
-    rings.setColorAt(index, new THREE.Color(palette.glow));
-    return {
-      island,
-      base,
-      phase,
-      bob: 0,
-      rotation: phase * 0.11,
-      scaleX: 0.94 + hashUnit(`${island.id}-x`) * 0.12,
-      scaleZ: 0.94 + hashUnit(`${island.id}-z`) * 0.12,
-    };
-  });
-  rings.instanceColor.needsUpdate = true;
-  const islandAnimationById = new Map(islandAnimation.map((item) => [item.island.id, item]));
-  const geometryDiagnostics = createIslandGeometryDiagnostics({
-    islandGeometry,
-    stoneTopGeometry,
-    grassTopGeometry,
-    grassTopMaterial,
-    bodies,
-    stoneTops,
-    tops,
-    animation: islandAnimation[0],
-  });
-  if (debugMode) console.info(`[geometry-qa] ${JSON.stringify(geometryDiagnostics)}`);
-  const landmarks = createLandmarkSystem({ scene, activeIslands, islandAnimationById, resources });
-
-  const bridgeMaterials = createBridgeMaterials(palette, resources);
-  const bridgeVisuals = [];
-  const bridgePickMeshes = [];
-  const bridgeGeometryChecks = [];
-  const activeIslandBridges = data.bridges.filter((bridge) => islandById.get(bridge.from)?.regionId === activeRegion.id);
-  activeIslandBridges.forEach((bridge) => {
-    const fromAnimation = islandAnimationById.get(bridge.from);
-    const toAnimation = islandAnimationById.get(bridge.to);
-    const curvePoints = createIslandBridgeCurvePoints(
-      fromAnimation,
-      toAnimation,
-      4.8,
-      ISLAND_BRIDGE_RADIUS,
-    );
-    const visual = createBridgeVisual({
-      bridge,
-      from: curvePoints[0],
-      to: curvePoints[curvePoints.length - 1],
-      curvePoints,
-      radius: ISLAND_BRIDGE_RADIUS,
-      openMaterial: bridgeMaterials.islandOpen,
-      closedMaterial: bridgeMaterials.islandClosed,
-      sag: 4.8,
-      tubularSegments: 28,
-      endpointAnimations: [fromAnimation, toAnimation],
-    });
-    bridgeGeometryChecks.push(validateIslandBridgeCurve({
-      bridge,
-      curve: visual.curve,
-      endpointAnimations: [fromAnimation, toAnimation],
-      sampleCount: 32,
-      debugMode,
-    }));
-    scene.add(visual.group);
-    bridgeVisuals.push(visual);
-    bridgePickMeshes.push(...visual.pickMeshes);
-  });
+  const sharedGeometries = {
+    body: createIslandBodyGeometry(),
+    stone: new THREE.RingGeometry(STONE_BAND_INNER_RADIUS, 1, 24, 1),
+    grass: new THREE.CircleGeometry(GRASS_DISC_RADIUS, 24),
+    ring: new THREE.TorusGeometry(RING_MAJOR_RADIUS, RING_TUBE_RADIUS, 4, 36),
+  };
+  sharedGeometries.stone.rotateX(-Math.PI / 2);
+  sharedGeometries.grass.rotateX(-Math.PI / 2);
+  sharedGeometries.ring.rotateX(Math.PI / 2);
+  globalResources.geometries.push(...Object.values(sharedGeometries));
 
   const regionNodes = new Map();
   data.regions.forEach((region, index) => {
-    const node = createRegionNode(region, index === 0, resources);
+    const node = createRegionNode(region, index === 0, globalResources);
     scene.add(node);
     regionNodes.set(region.id, node);
   });
 
+  const regionBridgeMaterials = createBridgeMaterials(PALETTES.helios, globalResources);
   const regionBridgeVisuals = [];
   const regionBridgePickMeshes = [];
   data.regionBridges.forEach((bridge) => {
@@ -206,8 +84,8 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
       from,
       to,
       radius: 1.3,
-      openMaterial: bridgeMaterials.regionOpen,
-      closedMaterial: bridgeMaterials.regionClosed,
+      openMaterial: regionBridgeMaterials.regionOpen,
+      closedMaterial: regionBridgeMaterials.regionClosed,
       sag: 24,
       tubularSegments: 36,
     });
@@ -217,12 +95,7 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
     regionBridgePickMeshes.push(...visual.pickMeshes);
   });
 
-  const zeynep = createCharacter('Zeynep', 'front', { resources });
-  const startIsland = activeIslands[0];
-  const startIslandScale = startIsland.radius / ORIGINAL_START_ISLAND_RADIUS;
-  const zeynepScale = startIsland.radius * (6.3 / ORIGINAL_START_ISLAND_RADIUS);
-  const zeynepOffset = new THREE.Vector2(2.8, -1.6).multiplyScalar(startIslandScale);
-  zeynep.scale.setScalar(zeynepScale);
+  const zeynep = createCharacter('Zeynep', 'front', { resources: globalResources });
   const contactShadowGeometry = new THREE.CircleGeometry(1, 24);
   contactShadowGeometry.rotateX(-Math.PI / 2);
   const contactShadowMaterial = new THREE.MeshBasicMaterial({
@@ -234,77 +107,295 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
   });
   const contactShadow = new THREE.Mesh(contactShadowGeometry, contactShadowMaterial);
   contactShadow.name = 'Zeynep soft contact shadow';
-  contactShadow.scale.setScalar(startIsland.radius * (2.7 / ORIGINAL_START_ISLAND_RADIUS));
   contactShadow.renderOrder = 2;
-  resources.geometries.push(contactShadowGeometry);
-  resources.materials.push(contactShadowMaterial);
+  globalResources.geometries.push(contactShadowGeometry);
+  globalResources.materials.push(contactShadowMaterial);
   scene.add(contactShadow, zeynep);
 
-  let selectedIslandId = activeIslands[0].id;
-  let detailOpacity = 1;
-  let worldBlend = 0;
+  function createDetailedRegion(regionId) {
+    disposeDetailedRegion();
+    const activeRegion = regionById.get(regionId);
+    if (!activeRegion) throw new Error(`Bilinmeyen bölge: ${regionId}`);
+    const activeIslands = activeRegion.islands.map((id) => islandById.get(id));
+    const palette = normalizedPalette(activeRegion.id);
+    const ownedResources = { geometries: [], materials: [], textures: [] };
+    const group = new THREE.Group();
+    group.name = `${activeRegion.name} detailed region`;
+    scene.add(group);
 
-  function selectIsland(islandId) {
-    if (!islandWorldPositions.has(islandId)) return;
-    selectedIslandId = islandId;
-    activeIslands.forEach((island, index) => {
-      rings.setColorAt(index, new THREE.Color(island.id === islandId ? 0xfff5cf : palette.glow));
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: palette.rock,
+      roughness: 0.82,
+      metalness: 0,
+      flatShading: true,
+      transparent: true,
+    });
+    const stoneTopMaterial = new THREE.MeshStandardMaterial({
+      color: 0xcfc4b0,
+      map: textures.stone.color,
+      normalMap: textures.stone.normal,
+      roughnessMap: textures.stone.roughness,
+      roughness: 0.82,
+      metalness: 0,
+      transparent: true,
+    });
+    const grassTopMaterial = new THREE.MeshStandardMaterial({
+      color: palette.grass,
+      roughness: 0.9,
+      metalness: 0,
+      transparent: true,
+      depthTest: true,
+      depthWrite: true,
+    });
+    const ringMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: palette.glow,
+      emissiveIntensity: 1.35,
+      roughness: 0.4,
+      metalness: 0.02,
+      transparent: true,
+      opacity: 0.96,
+      toneMapped: false,
+    });
+    ownedResources.materials.push(bodyMaterial, stoneTopMaterial, grassTopMaterial, ringMaterial);
+
+    const bodies = new THREE.InstancedMesh(sharedGeometries.body, bodyMaterial, activeIslands.length);
+    const stoneTops = new THREE.InstancedMesh(sharedGeometries.stone, stoneTopMaterial, activeIslands.length);
+    const tops = new THREE.InstancedMesh(sharedGeometries.grass, grassTopMaterial, activeIslands.length);
+    const rings = new THREE.InstancedMesh(sharedGeometries.ring, ringMaterial, activeIslands.length);
+    const namePrefix = activeRegion.id === 'helios' ? 'Tutorial' : activeRegion.name;
+    bodies.name = `${namePrefix} island bodies (instanced)`;
+    stoneTops.name = `${namePrefix} island PBR stone bands (instanced)`;
+    tops.name = `${namePrefix} island moss centers (instanced)`;
+    rings.name = `${namePrefix} island emissive rims (instanced)`;
+    [bodies, stoneTops, tops, rings].forEach((mesh) => { mesh.frustumCulled = false; });
+    bodies.renderOrder = 0;
+    stoneTops.renderOrder = 1;
+    tops.renderOrder = 2;
+    rings.renderOrder = 3;
+    bodies.castShadow = true;
+    bodies.receiveShadow = true;
+    stoneTops.castShadow = true;
+    stoneTops.receiveShadow = true;
+    tops.castShadow = true;
+    tops.receiveShadow = true;
+    for (const mesh of [bodies, stoneTops, tops, rings]) {
+      mesh.userData.islandIds = activeIslands.map((island) => island.id);
+    }
+    group.add(bodies, stoneTops, tops, rings);
+
+    const islandAnimation = activeIslands.map((island, index) => {
+      const base = vectorFrom(island.localPosition).add(vectorFrom(activeRegion.position));
+      islandWorldPositions.set(island.id, base.clone());
+      const phase = hashUnit(island.id) * Math.PI * 2;
+      rings.setColorAt(index, new THREE.Color(palette.glow));
+      return {
+        island,
+        base,
+        phase,
+        bob: 0,
+        rotation: phase * 0.11,
+        scaleX: 0.94 + hashUnit(`${island.id}-x`) * 0.12,
+        scaleZ: 0.94 + hashUnit(`${island.id}-z`) * 0.12,
+      };
     });
     rings.instanceColor.needsUpdate = true;
+    const islandAnimationById = new Map(islandAnimation.map((item) => [item.island.id, item]));
+    const geometryDiagnostics = createIslandGeometryDiagnostics({
+      islandGeometry: sharedGeometries.body,
+      stoneTopGeometry: sharedGeometries.stone,
+      grassTopGeometry: sharedGeometries.grass,
+      grassTopMaterial,
+      bodies,
+      stoneTops,
+      tops,
+      animation: islandAnimation[0],
+    });
+    if (debugMode) console.info(`[geometry-qa] ${activeRegion.id}: ${JSON.stringify(geometryDiagnostics)}`);
+    const landmarks = createLandmarkSystem({
+      parent: group,
+      activeIslands,
+      islandAnimationById,
+      resources: ownedResources,
+      namePrefix,
+    });
+
+    const bridgeMaterials = createBridgeMaterials(palette, ownedResources);
+    const bridgeVisuals = [];
+    const bridgePickMeshes = [];
+    const bridgeGeometryChecks = [];
+    const activeIslandBridges = data.bridges.filter(
+      (bridge) => islandById.get(bridge.from)?.regionId === activeRegion.id,
+    );
+    activeIslandBridges.forEach((bridge) => {
+      const fromAnimation = islandAnimationById.get(bridge.from);
+      const toAnimation = islandAnimationById.get(bridge.to);
+      const curvePoints = createIslandBridgeCurvePoints(
+        fromAnimation,
+        toAnimation,
+        4.8,
+        ISLAND_BRIDGE_RADIUS,
+      );
+      const visual = createBridgeVisual({
+        bridge,
+        from: curvePoints[0],
+        to: curvePoints[curvePoints.length - 1],
+        curvePoints,
+        radius: ISLAND_BRIDGE_RADIUS,
+        openMaterial: bridgeMaterials.islandOpen,
+        closedMaterial: bridgeMaterials.islandClosed,
+        sag: 4.8,
+        tubularSegments: 28,
+        endpointAnimations: [fromAnimation, toAnimation],
+      });
+      visual.setState(bridgeStateOverrides.get(bridge.id) || bridge.state);
+      bridgeGeometryChecks.push(validateIslandBridgeCurve({
+        bridge,
+        curve: visual.curve,
+        endpointAnimations: [fromAnimation, toAnimation],
+        sampleCount: 32,
+        debugMode,
+      }));
+      group.add(visual.group);
+      bridgeVisuals.push(visual);
+      bridgePickMeshes.push(...visual.pickMeshes);
+    });
+
+    detailedRegion = {
+      group,
+      activeRegion,
+      activeIslands,
+      palette,
+      ownedResources,
+      bodyMaterial,
+      stoneTopMaterial,
+      grassTopMaterial,
+      ringMaterial,
+      bodies,
+      stoneTops,
+      tops,
+      rings,
+      islandAnimation,
+      islandAnimationById,
+      landmarks,
+      bridgeVisuals,
+      bridgePickMeshes,
+      bridgeGeometryChecks,
+      geometryDiagnostics,
+      baseMatrix: new THREE.Object3D(),
+    };
+    if (!activeRegion.islands.includes(selectedIslandId)) selectedIslandId = activeRegion.islands[0];
+    selectIsland(selectedIslandId);
+    setMapBlend(regionBlend, worldBlend);
+    refreshRegionNodes();
+    return detailedRegion;
+  }
+
+  function disposeDetailedRegion() {
+    if (!detailedRegion) return;
+    scene.remove(detailedRegion.group);
+    detailedRegion.bridgeVisuals.forEach((visual) => visual.dispose());
+    detailedRegion.ownedResources.geometries.forEach((item) => item.dispose?.());
+    detailedRegion.ownedResources.materials.forEach((item) => item.dispose?.());
+    detailedRegion.ownedResources.textures.forEach((item) => item.dispose?.());
+    detailedRegion.activeIslands.forEach((island) => islandWorldPositions.delete(island.id));
+    detailedRegion = null;
+  }
+
+  function selectIsland(islandId) {
+    if (!detailedRegion?.islandAnimationById.has(islandId)) return false;
+    selectedIslandId = islandId;
+    detailedRegion.activeIslands.forEach((island, index) => {
+      detailedRegion.rings.setColorAt(
+        index,
+        new THREE.Color(island.id === islandId ? 0xfff5cf : detailedRegion.palette.glow),
+      );
+    });
+    detailedRegion.rings.instanceColor.needsUpdate = true;
+    return true;
   }
 
   function update(elapsedSeconds, activeCamera) {
     lighting.update(activeCamera);
-    islandAnimation.forEach((item, index) => {
+    regionBridgeVisuals.forEach((visual) => visual.updateAnimation(elapsedSeconds));
+    if (!detailedRegion) return;
+    const detail = detailedRegion;
+    const { baseMatrix } = detail;
+    detail.islandAnimation.forEach((item, index) => {
       item.bob = Math.sin(elapsedSeconds * 0.72 + item.phase) * 0.3;
       const centerY = getIslandCenterY(item);
       const topY = getIslandTopY(item);
       const { radiusX, radiusZ } = getIslandRimAxes(item);
       baseMatrix.position.set(item.base.x, centerY, item.base.z);
       baseMatrix.rotation.set(0, item.rotation, 0);
-      baseMatrix.scale.set(
-        radiusX,
-        getIslandBodyScaleY(item),
-        radiusZ,
-      );
+      baseMatrix.scale.set(radiusX, getIslandBodyScaleY(item), radiusZ);
       baseMatrix.updateMatrix();
-      bodies.setMatrixAt(index, baseMatrix.matrix);
-
+      detail.bodies.setMatrixAt(index, baseMatrix.matrix);
       baseMatrix.position.y = topY;
       baseMatrix.scale.set(radiusX, 1, radiusZ);
       baseMatrix.updateMatrix();
-      stoneTops.setMatrixAt(index, baseMatrix.matrix);
-
+      detail.stoneTops.setMatrixAt(index, baseMatrix.matrix);
       baseMatrix.position.y = topY + GRASS_SURFACE_LIFT;
       baseMatrix.updateMatrix();
-      tops.setMatrixAt(index, baseMatrix.matrix);
-
+      detail.tops.setMatrixAt(index, baseMatrix.matrix);
       baseMatrix.position.y = topY + RING_SURFACE_LIFT;
       baseMatrix.scale.set(radiusX, (radiusX + radiusZ) / 2, radiusZ);
       baseMatrix.updateMatrix();
-      rings.setMatrixAt(index, baseMatrix.matrix);
+      detail.rings.setMatrixAt(index, baseMatrix.matrix);
       islandWorldPositions.get(item.island.id).set(item.base.x, centerY, item.base.z);
     });
-    bodies.instanceMatrix.needsUpdate = true;
-    stoneTops.instanceMatrix.needsUpdate = true;
-    tops.instanceMatrix.needsUpdate = true;
-    rings.instanceMatrix.needsUpdate = true;
-    landmarks.update(detailOpacity);
-    bridgeVisuals.forEach((visual) => visual.updateEndpointMotion());
+    detail.bodies.instanceMatrix.needsUpdate = true;
+    detail.stoneTops.instanceMatrix.needsUpdate = true;
+    detail.tops.instanceMatrix.needsUpdate = true;
+    detail.rings.instanceMatrix.needsUpdate = true;
+    detail.landmarks.update(detailOpacity);
+    detail.bridgeVisuals.forEach((visual) => {
+      visual.updateEndpointMotion();
+      visual.updateAnimation(elapsedSeconds);
+    });
+    updateCharacter(elapsedSeconds, activeCamera);
+  }
 
-    const startAnimation = islandAnimation[0];
-    const start = islandWorldPositions.get(startIsland.id);
-    const startTopY = getIslandTopY(startAnimation);
-    zeynep.position.set(
-      start.x + zeynepOffset.x,
-      startTopY + 0.03,
-      start.z + zeynepOffset.y,
-    );
-    contactShadow.position.set(
-      start.x + zeynepOffset.x,
-      startTopY + 0.015,
-      start.z + zeynepOffset.y,
-    );
+  function updateCharacter(elapsedSeconds, activeCamera) {
+    if (!detailedRegion) return;
+    let islandId = characterIslandId;
+    let characterPosition;
+    let shadowPosition;
+    let scale;
+    if (characterMove) {
+      const raw = THREE.MathUtils.clamp(
+        (elapsedSeconds - characterMove.startedAt) / characterMove.duration,
+        0,
+        1,
+      );
+      const progress = easeInOutCubic(raw);
+      const source = getCharacterAnchor(characterMove.fromIslandId);
+      const destination = getCharacterAnchor(characterMove.toIslandId);
+      const sourceCharacter = source?.character || characterMove.fromCharacter;
+      const sourceShadow = source?.shadow || characterMove.fromShadow;
+      const sourceScale = source?.scale || characterMove.fromScale;
+      characterPosition = sourceCharacter.clone().lerp(destination.character, progress);
+      characterPosition.y += Math.sin(progress * Math.PI) * 3.2;
+      shadowPosition = sourceShadow.clone().lerp(destination.shadow, progress);
+      scale = THREE.MathUtils.lerp(sourceScale, destination.scale, progress);
+      islandId = characterMove.toIslandId;
+      if (raw >= 1) {
+        characterIslandId = characterMove.toIslandId;
+        const resolve = characterMove.resolve;
+        characterMove = null;
+        resolve?.(true);
+      }
+    } else {
+      const destination = getCharacterAnchor(islandId);
+      if (!destination) return;
+      characterPosition = destination.character;
+      shadowPosition = destination.shadow;
+      scale = destination.scale;
+    }
+    zeynep.position.copy(characterPosition);
+    zeynep.scale.setScalar(scale);
+    contactShadow.position.copy(shadowPosition);
+    contactShadow.scale.setScalar(islandById.get(islandId).radius * (2.7 / ORIGINAL_START_ISLAND_RADIUS));
     zeynep.visible = detailOpacity > 0.42;
     contactShadow.visible = zeynep.visible;
     contactShadowMaterial.opacity = 0.3 * detailOpacity;
@@ -312,20 +403,69 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
     zeynep.userData.updateIdle(elapsedSeconds, 0.8);
   }
 
-  function setMapBlend(regionAmount, worldAmount) {
-    worldBlend = THREE.MathUtils.clamp(worldAmount, 0, 1);
-    const regionBlend = THREE.MathUtils.clamp(regionAmount, 0, 1);
-    detailOpacity = 1 - regionBlend * 0.42 - worldBlend * 0.48;
-    bodyMaterial.opacity = detailOpacity;
-    stoneTopMaterial.opacity = detailOpacity;
-    grassTopMaterial.opacity = detailOpacity;
-    ringMaterial.opacity = 0.96 - regionBlend * 0.18 - worldBlend * 0.5;
+  function getCharacterAnchor(islandId) {
+    const animation = detailedRegion?.islandAnimationById.get(islandId);
+    if (!animation) return null;
+    const islandScale = animation.island.radius / ORIGINAL_START_ISLAND_RADIUS;
+    const offset = new THREE.Vector2(2.8, -1.6).multiplyScalar(islandScale);
+    const topY = getIslandTopY(animation);
+    return {
+      character: new THREE.Vector3(animation.base.x + offset.x, topY + 0.03, animation.base.z + offset.y),
+      shadow: new THREE.Vector3(animation.base.x + offset.x, topY + 0.015, animation.base.z + offset.y),
+      scale: animation.island.radius * (6.3 / ORIGINAL_START_ISLAND_RADIUS),
+    };
+  }
 
-    bridgeVisuals.forEach((visual) => visual.setOpacity(1 - worldBlend * 0.62));
+  function moveCharacterTo(islandId, startedAt, duration = 0.8) {
+    const destination = getCharacterAnchor(islandId);
+    if (!destination) return Promise.resolve(false);
+    if (characterMove) characterMove.resolve?.(false);
+    if (duration <= 0) {
+      characterIslandId = islandId;
+      characterMove = null;
+      zeynep.position.copy(destination.character);
+      contactShadow.position.copy(destination.shadow);
+      zeynep.scale.setScalar(destination.scale);
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      characterMove = {
+        fromIslandId: characterIslandId,
+        toIslandId: islandId,
+        startedAt,
+        duration,
+        fromCharacter: zeynep.position.clone(),
+        fromShadow: contactShadow.position.clone(),
+        fromScale: zeynep.scale.x,
+        resolve,
+      };
+    });
+  }
+
+  function setMapBlend(regionAmount, worldAmount) {
+    regionBlend = THREE.MathUtils.clamp(regionAmount, 0, 1);
+    worldBlend = THREE.MathUtils.clamp(worldAmount, 0, 1);
+    detailOpacity = 1 - regionBlend * 0.42 - worldBlend * 0.48;
+    if (detailedRegion) {
+      detailedRegion.bodyMaterial.opacity = detailOpacity;
+      detailedRegion.stoneTopMaterial.opacity = detailOpacity;
+      detailedRegion.grassTopMaterial.opacity = detailOpacity;
+      detailedRegion.ringMaterial.opacity = 0.96 - regionBlend * 0.18 - worldBlend * 0.5;
+      detailedRegion.bridgeVisuals.forEach((visual) => visual.setOpacity(1 - worldBlend * 0.62));
+    }
     regionBridgeVisuals.forEach((visual) => visual.setOpacity(worldBlend));
-    data.regions.forEach((region, index) => {
+    refreshRegionNodes();
+  }
+
+  function refreshRegionNodes() {
+    data.regions.forEach((region) => {
       const node = regionNodes.get(region.id);
-      if (index === 0) {
+      const active = region.id === detailedRegion?.activeRegion.id;
+      const reachable = reachableRegionIds.has(region.id);
+      node.userData.locked = !reachable;
+      node.userData.active = active;
+      node.material.color.setHex(active ? normalizedPalette(region.id).node : reachable ? 0x466b76 : 0x344e64);
+      if (active) {
         node.visible = worldBlend > 0.01;
         node.material.opacity = worldBlend * 0.94;
       } else {
@@ -333,6 +473,43 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
         node.material.opacity = Math.min(1, 0.58 + regionBlend * 0.06 + worldBlend * 0.36);
       }
     });
+  }
+
+  function syncProgress(snapshot) {
+    reachableRegionIds = getReachableRegionsFromSnapshot(snapshot);
+    for (const bridge of [...data.bridges, ...data.regionBridges]) {
+      setBridgeState(bridge.id, snapshot.openBridges.has(bridge.id) ? 'open' : 'closed');
+    }
+    refreshRegionNodes();
+  }
+
+  function getReachableRegionsFromSnapshot(snapshot) {
+    const visited = new Set();
+    const queue = [snapshot.activeRegionId];
+    while (queue.length) {
+      const regionId = queue.shift();
+      if (visited.has(regionId)) continue;
+      visited.add(regionId);
+      data.regionBridges.forEach((bridge) => {
+        if (!snapshot.openBridges.has(bridge.id)) return;
+        if (bridge.from === regionId) queue.push(bridge.to);
+        if (bridge.to === regionId) queue.push(bridge.from);
+      });
+    }
+    return visited;
+  }
+
+  function setBridgeState(bridgeId, state, options = {}) {
+    bridgeStateOverrides.set(bridgeId, state);
+    const visual = [...(detailedRegion?.bridgeVisuals || []), ...regionBridgeVisuals]
+      .find((item) => item.bridge.id === bridgeId);
+    if (!visual) return false;
+    if (options.animate && state === 'open') {
+      visual.animateOpen(options.startedAt || 0, options.duration || 1.2);
+    } else {
+      visual.setState(state);
+    }
+    return true;
   }
 
   function getIslandPosition(islandId) {
@@ -347,39 +524,62 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
     return null;
   }
 
+  function getRegionBridge(fromRegionId, toRegionId, openOnly = false) {
+    return regionBridgeVisuals.find((visual) => {
+      const connects = (visual.bridge.from === fromRegionId && visual.bridge.to === toRegionId)
+        || (visual.bridge.from === toRegionId && visual.bridge.to === fromRegionId);
+      return connects && (!openOnly || bridgeStateOverrides.get(visual.bridge.id) === 'open');
+    }) || null;
+  }
+
+  createDetailedRegion(data.regions[0].id);
+  moveCharacterTo(characterIslandId, 0, 0);
   setMapBlend(0, 0);
   const ready = Promise.all([textures.ready, zeynep.userData.textureReady]);
 
   return {
     scene,
-    activeRegion,
-    activeIslands,
     regionNodes,
-    tops,
-    islandPickMeshes: [tops, stoneTops, bodies],
-    rings,
-    landmarks,
-    geometryDiagnostics,
-    islandWorldPositions,
-    bridgePickMeshes,
     regionBridgePickMeshes,
-    bridgeVisuals,
-    bridgeGeometryChecks,
     regionBridgeVisuals,
+    islandWorldPositions,
     ready,
     update,
     setMapBlend,
     selectIsland,
+    createDetailedRegion,
+    disposeDetailedRegion,
+    moveCharacterTo,
+    syncProgress,
+    setBridgeState,
     getIslandPosition,
     getBridgeHit,
+    getRegionBridge,
+    get activeRegion() { return detailedRegion.activeRegion; },
+    get activeIslands() { return detailedRegion.activeIslands; },
+    get islandPickMeshes() { return [detailedRegion.tops, detailedRegion.stoneTops, detailedRegion.bodies]; },
+    get rings() { return detailedRegion.rings; },
+    get tops() { return detailedRegion.tops; },
+    get landmarks() { return detailedRegion.landmarks; },
+    get bridgePickMeshes() { return detailedRegion.bridgePickMeshes; },
+    get bridgeVisuals() { return detailedRegion.bridgeVisuals; },
+    get bridgeGeometryChecks() { return detailedRegion.bridgeGeometryChecks; },
+    get geometryDiagnostics() { return detailedRegion.geometryDiagnostics; },
     get selectedIslandId() { return selectedIslandId; },
+    get characterIslandId() { return characterIslandId; },
     dispose() {
-      [...bridgeVisuals, ...regionBridgeVisuals].forEach((visual) => visual.dispose());
-      resources.geometries.forEach((item) => item.dispose?.());
-      resources.materials.forEach((item) => item.dispose?.());
-      resources.textures.forEach((item) => item.dispose?.());
+      disposeDetailedRegion();
+      regionBridgeVisuals.forEach((visual) => visual.dispose());
+      globalResources.geometries.forEach((item) => item.dispose?.());
+      globalResources.materials.forEach((item) => item.dispose?.());
+      globalResources.textures.forEach((item) => item.dispose?.());
     },
   };
+}
+
+function normalizedPalette(regionId) {
+  const palette = PALETTES[regionId] || PALETTES.helios;
+  return { ...palette, grass: palette.grass || palette.top };
 }
 
 function createIslandBodyGeometry() {
@@ -467,7 +667,7 @@ function countHorizontalTopTriangles(geometry, topY) {
   return horizontalTriangles;
 }
 
-function createLandmarkSystem({ scene, activeIslands, islandAnimationById, resources }) {
+function createLandmarkSystem({ parent, activeIslands, islandAnimationById, resources, namePrefix }) {
   const landmarkDefinitions = {
     'broken-column': {
       geometry: createBrokenColumnGeometry(),
@@ -528,11 +728,11 @@ function createLandmarkSystem({ scene, activeIslands, islandAnimationById, resou
   for (const [type, definition] of Object.entries(landmarkDefinitions)) {
     const entries = entriesByType.get(type);
     const mesh = new THREE.InstancedMesh(definition.geometry, definition.material, entries.length);
-    mesh.name = `Tutorial ${type} landmarks (instanced)`;
+    mesh.name = `${namePrefix} ${type} landmarks (instanced)`;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.frustumCulled = false;
-    scene.add(mesh);
+    parent.add(mesh);
     meshes.set(type, { mesh, entries, definition });
     materials.push(definition.material);
     resources.geometries.push(definition.geometry);
@@ -814,6 +1014,10 @@ function createBridgeVisual({
 }) {
   const group = new THREE.Group();
   group.name = bridge.id;
+  const openVisualMaterial = openMaterial.clone();
+  const closedVisualMaterial = closedMaterial.clone();
+  openVisualMaterial.transparent = true;
+  closedVisualMaterial.transparent = true;
   const distance = from.distanceTo(to);
   const direction = to.clone().sub(from);
   const points = curvePoints || [
@@ -826,7 +1030,7 @@ function createBridgeVisual({
   const radialSegments = 5;
   const openGeometry = new THREE.TubeGeometry(curve, tubularSegments, radius, radialSegments, false);
   addBridgeProgressAttribute(openGeometry, 0, 1, tubularSegments, radialSegments);
-  const openMesh = new THREE.Mesh(openGeometry, openMaterial);
+  const openMesh = new THREE.Mesh(openGeometry, openVisualMaterial);
   openMesh.name = `${bridge.id} open tube`;
   group.add(openMesh);
 
@@ -855,11 +1059,15 @@ function createBridgeVisual({
   }
   const closedGeometry = mergeGeometries(closedSegmentGeometries, false);
   closedSegmentGeometries.forEach((geometry) => geometry.dispose());
-  const closedMesh = new THREE.Mesh(closedGeometry, closedMaterial);
+  const closedMesh = new THREE.Mesh(closedGeometry, closedVisualMaterial);
   closedMesh.name = `${bridge.id} merged closed dashes`;
   group.add(closedMesh);
 
   const state = { value: bridge.state };
+  let opacityScale = 1;
+  let animation = null;
+  let openWeight = bridge.state === 'open' ? 1 : 0;
+  let closedWeight = bridge.state === 'closed' ? 1 : 0;
   const pickMeshes = [openMesh, closedMesh];
   const openDeformer = createBridgeVerticalDeformer(openGeometry);
   const closedDeformer = createBridgeVerticalDeformer(closedGeometry);
@@ -871,9 +1079,31 @@ function createBridgeVisual({
     get state() { return state.value; },
     toggle() { this.setState(state.value === 'open' ? 'closed' : 'open'); },
     setState(nextState) {
+      animation = null;
       state.value = nextState;
-      openMesh.visible = nextState === 'open';
-      closedMesh.visible = nextState === 'closed';
+      openWeight = nextState === 'open' ? 1 : 0;
+      closedWeight = nextState === 'closed' ? 1 : 0;
+      applyOpacity();
+    },
+    animateOpen(startedAt, duration = 1.2) {
+      state.value = 'open';
+      animation = { startedAt, duration };
+      openWeight = 0;
+      closedWeight = 1;
+      applyOpacity();
+    },
+    updateAnimation(elapsedSeconds) {
+      if (!animation) return;
+      const raw = THREE.MathUtils.clamp(
+        (elapsedSeconds - animation.startedAt) / animation.duration,
+        0,
+        1,
+      );
+      const progress = easeInOutCubic(raw);
+      openWeight = progress;
+      closedWeight = 1 - progress;
+      applyOpacity();
+      if (raw >= 1) animation = null;
     },
     updateEndpointMotion() {
       if (!endpointAnimations) return;
@@ -882,18 +1112,25 @@ function createBridgeVisual({
       closedDeformer.update(fromAnimation.bob, toAnimation.bob);
     },
     setOpacity(amount) {
-      group.visible = amount > 0.01;
-      group.traverse((object) => {
-        if (object.isMesh) object.userData.opacityScale = amount;
-      });
-      openMesh.material.opacity = THREE.MathUtils.clamp(amount, 0.08, 1);
-      closedMesh.material.opacity = THREE.MathUtils.clamp(amount, 0.04, 1);
+      opacityScale = THREE.MathUtils.clamp(amount, 0, 1);
+      applyOpacity();
     },
     dispose() {
       openGeometry.dispose();
       closedGeometry.dispose();
+      openVisualMaterial.dispose();
+      closedVisualMaterial.dispose();
     },
   };
+  function applyOpacity() {
+    group.visible = opacityScale > 0.01;
+    openMesh.visible = group.visible && openWeight > 0.01;
+    closedMesh.visible = group.visible && closedWeight > 0.01;
+    openVisualMaterial.opacity = opacityScale * openWeight;
+    closedVisualMaterial.opacity = opacityScale * closedWeight;
+    openVisualMaterial.depthWrite = openWeight > 0.5;
+    closedVisualMaterial.depthWrite = closedWeight > 0.5;
+  }
   pickMeshes.forEach((mesh) => { mesh.userData.bridgeVisual = visual; });
   visual.setState(bridge.state);
   return visual;
@@ -1096,4 +1333,10 @@ function hashUnit(value) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0) / 4294967295;
+}
+
+function easeInOutCubic(value) {
+  return value < 0.5
+    ? 4 * value * value * value
+    : 1 - Math.pow(-2 * value + 2, 3) / 2;
 }

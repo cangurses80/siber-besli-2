@@ -34,17 +34,32 @@
       <div id="region-labels" class="region-labels" aria-hidden="true"></div>
 
       <section id="island-card" class="island-card" aria-live="polite">
-        <div class="island-card__copy">
-          <span class="island-card__eyebrow">SEÇİLİ ADA</span>
-          <strong id="island-name">Güneş Kapısı</strong>
-          <p class="gesture-hint">Döndürmek için sürükle · Yaklaşmak için sıkıştır</p>
+        <div class="island-card__main">
+          <div class="island-card__copy">
+            <span id="card-eyebrow" class="island-card__eyebrow">SEÇİLİ ADA</span>
+            <strong id="island-name">Güneş Kapısı</strong>
+            <p id="island-status" class="island-status"></p>
+            <p class="gesture-hint">Döndürmek için sürükle · Yaklaşmak için sıkıştır</p>
+          </div>
+          <div id="difficulty" class="difficulty" aria-label="Zorluk: 1 / 5">
+            <span class="difficulty__label">ZORLUK</span>
+            <span id="difficulty-dots" class="difficulty__dots">●○○○○</span>
+          </div>
         </div>
-        <div id="difficulty" class="difficulty" aria-label="Zorluk: 1 / 5">
-          <span class="difficulty__label">ZORLUK</span>
-          <span id="difficulty-dots" class="difficulty__dots">●○○○○</span>
-        </div>
+        <button id="card-action" class="card-action" type="button" hidden>Gir</button>
       </section>
+
+      <aside id="debug-controls" class="debug-controls" hidden aria-label="Debug kontrolleri">
+        <button id="debug-solve-island" type="button">Seçili adayı çöz</button>
+        <button id="debug-solve-region" type="button">Bölgeyi tamamen çöz</button>
+      </aside>
+
       <div id="transition-shade" class="transition-shade"></div>
+
+      <section id="puzzle-room" class="puzzle-room" aria-hidden="true" hidden>
+        <div class="puzzle-room__glow" aria-hidden="true"></div>
+        <div id="puzzle-container" class="puzzle-room__content"></div>
+      </section>
     </main>
     <script type="module" src="/src/main.js"></script>
   </body>

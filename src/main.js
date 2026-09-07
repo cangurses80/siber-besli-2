@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import worldData from './world.json';
+import { createProgress } from './progress.js';
+import { createPuzzleSeed, getPuzzle } from './puzzles/index.js';
 import { createRenderPipeline } from './render/pipeline.js';
 import { createWorldTextureLibrary } from './render/textures.js';
 import { createWorldScene } from './scene/worldScene.js';
@@ -12,14 +14,23 @@ const modeIcon = modeButton.querySelector('.mode-button__icon');
 const modeTitle = document.querySelector('#mode-title');
 const lockedToast = document.querySelector('#locked-toast');
 const islandCard = document.querySelector('#island-card');
+const cardEyebrow = document.querySelector('#card-eyebrow');
 const islandName = document.querySelector('#island-name');
+const islandStatus = document.querySelector('#island-status');
 const difficulty = document.querySelector('#difficulty');
 const difficultyDots = document.querySelector('#difficulty-dots');
+const cardAction = document.querySelector('#card-action');
 const loading = document.querySelector('#loading');
 const fpsElement = document.querySelector('#fps');
 const transitionShade = document.querySelector('#transition-shade');
 const islandLabelsContainer = document.querySelector('#island-labels');
 const regionLabelsContainer = document.querySelector('#region-labels');
+const regionName = document.querySelector('#region-name');
+const debugControls = document.querySelector('#debug-controls');
+const debugSolveIsland = document.querySelector('#debug-solve-island');
+const debugSolveRegion = document.querySelector('#debug-solve-region');
+const puzzleRoom = document.querySelector('#puzzle-room');
+const puzzleContainer = document.querySelector('#puzzle-container');
 
 const searchParams = new URLSearchParams(window.location.search);
 const debugMode = searchParams.get('debug') === '1';
@@ -35,7 +46,9 @@ worldCamera.up.set(0, 0, -1);
 
 const pipeline = createRenderPipeline(canvas, placeholderScene, perspectiveCamera);
 const textures = createWorldTextureLibrary(pipeline.renderer);
+const progress = createProgress(worldData);
 const world = createWorldScene({ renderer: pipeline.renderer, textures, data: worldData, debugMode });
+world.syncProgress(progress.state);
 
 const controls = new OrbitControls(perspectiveCamera, canvas);
 controls.enableDamping = true;
@@ -45,7 +58,7 @@ controls.minDistance = 34;
 controls.maxDistance = 155;
 controls.minPolarAngle = THREE.MathUtils.degToRad(18);
 controls.maxPolarAngle = THREE.MathUtils.degToRad(78);
-controls.target.copy(world.getIslandPosition(world.selectedIslandId));
+controls.target.copy(world.getIslandPosition(progress.state.currentIslandId));
 controls.update();
 
 const MODES = [
@@ -74,12 +87,34 @@ const CAMERA_PRESETS = {
   },
   region: { modeId: 'region' },
   world: { modeId: 'world' },
+  'puzzle-room': {
+    modeId: 'explore',
+    islandId: 'helios-01',
+    positionOffset: new THREE.Vector3(28, 68, 30),
+    targetOffset: new THREE.Vector3(0, 0.4, 0),
+    qaState: 'puzzle-room',
+  },
+  'solved-bridge': {
+    modeId: 'explore',
+    islandId: 'helios-03',
+    positionOffset: new THREE.Vector3(52, 34, 46),
+    targetOffset: new THREE.Vector3(-8, 0, 10),
+    qaState: 'solved-bridge',
+  },
+  'region-2': {
+    modeId: 'explore',
+    islandId: 'khepri-01',
+    positionOffset: new THREE.Vector3(64, 48, 70),
+    targetOffset: new THREE.Vector3(0, 0.4, 0),
+    qaState: 'region-2',
+  },
 };
 
 let modeIndex = 0;
 let activeCamera = perspectiveCamera;
 let cameraTarget = controls.target.clone();
 let cameraTransition = null;
+let regionFlight = null;
 let toastTimer = null;
 let titleTimer = null;
 let currentRegionBlend = 0;
@@ -87,41 +122,68 @@ let currentWorldBlend = 0;
 let pointerStart = null;
 let fpsFrames = 0;
 let fpsElapsed = 0;
-
-const islandLabelElements = new Map();
-world.activeIslands.forEach((island) => {
-  const label = createLabel(island.name, `Zorluk ${island.difficulty}`);
-  islandLabelsContainer.append(label);
-  islandLabelElements.set(island.id, label);
-});
+let elapsedTime = 0;
+let selectedIslandId = progress.state.currentIslandId;
+let selectedRegionId = progress.state.activeRegionId;
+let cardActionHandler = null;
+let inputLocked = false;
+let puzzleOpen = false;
+let puzzleClosing = false;
+let activePuzzle = null;
+let activePuzzleIsland = null;
+let renderPaused = false;
+let islandLabelElements = new Map();
 const regionLabelElements = new Map();
-worldData.regions.forEach((region, index) => {
-  const label = createLabel(region.name, index === 0 ? 'Aktif bölge' : 'Kilitli', index !== 0);
+
+rebuildIslandLabels();
+worldData.regions.forEach((region) => {
+  const label = createLabel(region.name, 'Kilitli', true);
   regionLabelsContainer.append(label);
   regionLabelElements.set(region.id, label);
 });
+updateRegionLabels();
 
 document.body.dataset.mode = MODES[modeIndex].id;
+document.body.dataset.inputLocked = 'false';
 fpsElement.hidden = !debugMode;
-updateIslandCard(world.selectedIslandId);
+debugControls.hidden = !debugMode || Boolean(cameraPresetId);
+updateCard();
 window.__CAMERA_PRESET_READY__ = false;
+window.__QA_STATE_READY__ = false;
 window.__QA_FRAME_COUNT__ = 0;
+window.__WORLD_READY__ = false;
+window.__RENDER_PAUSED__ = false;
 resize();
-applyCameraPreset(cameraPresetId);
 
 modeButton.addEventListener('click', () => {
-  const nextIndex = (modeIndex + 1) % MODES.length;
-  beginModeTransition(nextIndex);
+  if (inputLocked) return;
+  beginModeTransition((modeIndex + 1) % MODES.length);
 });
+cardAction.addEventListener('click', () => cardActionHandler?.());
+debugSolveIsland.addEventListener('click', solveSelectedIslandForDebug);
+debugSolveRegion.addEventListener('click', solveActiveRegionForDebug);
 window.addEventListener('resize', resize, { passive: true });
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && puzzleOpen && !puzzleClosing) closePuzzleRoom();
+});
 canvas.addEventListener('pointerdown', onPointerDown, { passive: true });
 canvas.addEventListener('pointerup', onPointerUp, { passive: true });
 canvas.addEventListener('pointercancel', () => { pointerStart = null; }, { passive: true });
 
+progress.subscribe((event) => {
+  world.syncProgress(event.state);
+  updateRegionLabels();
+  updateCard();
+});
+
+pipeline.renderer.setAnimationLoop(renderFrame);
+
 world.ready
-  .then(() => {
+  .then(async () => {
     loading.classList.add('is-done');
     window.__WORLD_READY__ = true;
+    await applyCameraPreset(cameraPresetId);
+    refreshDiagnostics();
   })
   .catch((error) => {
     console.error('[world] Varlıklar yüklenemedi', error);
@@ -130,37 +192,18 @@ world.ready
     window.__WORLD_READY__ = false;
   });
 
-window.__WORLD_READY__ = false;
-const gl = pipeline.renderer.getContext();
-const rendererDebugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-window.__WORLD_DIAGNOSTICS__ = {
-  threeRevision: THREE.REVISION,
-  regionCount: worldData.regions.length,
-  islandCount: worldData.islands.length,
-  activeIslandInstances: world.activeIslands.length,
-  landmarkInstances: world.landmarks.counts,
-  islandGeometry: world.geometryDiagnostics,
-  bridgeGeometryChecks: world.bridgeGeometryChecks,
-  cameraTransitionMilliseconds: 800,
-  debugMode,
-  cameraPresetId,
-  renderer: rendererDebugInfo
-    ? gl.getParameter(rendererDebugInfo.UNMASKED_RENDERER_WEBGL)
-    : gl.getParameter(gl.RENDERER),
-};
-
-pipeline.renderer.setAnimationLoop(renderFrame);
-
 function renderFrame() {
   const delta = Math.min(clock.getDelta(), 0.05);
-  const elapsed = clock.elapsedTime;
-  updateCameraTransition(elapsed);
-  if (!cameraTransition && MODES[modeIndex].id === 'explore') {
-    controls.enabled = true;
+  elapsedTime += delta;
+  if (regionFlight) updateRegionFlight(elapsedTime);
+  else updateCameraTransition(elapsedTime);
+  if (!cameraTransition && !regionFlight && MODES[modeIndex].id === 'explore') {
+    controls.enabled = !inputLocked;
     controls.update();
     cameraTarget.copy(controls.target);
   }
-  world.update(cameraPresetId ? 2.25 : elapsed, activeCamera);
+  const worldElapsed = cameraPresetId ? 2.25 : elapsedTime;
+  world.update(worldElapsed, activeCamera);
   updateLabels();
   updateFps(delta);
   pipeline.render(world.scene, activeCamera, delta);
@@ -168,7 +211,7 @@ function renderFrame() {
 }
 
 function beginModeTransition(nextIndex) {
-  if (cameraTransition) return;
+  if (cameraTransition || regionFlight || inputLocked) return;
   const nextMode = MODES[nextIndex];
   const fromMode = MODES[modeIndex];
   const fromPosition = activeCamera.position.clone();
@@ -184,11 +227,12 @@ function beginModeTransition(nextIndex) {
   modeLabel.textContent = nextMode.label;
   modeIcon.textContent = nextMode.icon;
   modeButton.setAttribute('aria-label', `Kamera modu: ${nextMode.label}`);
-  islandCard.classList.toggle('is-hidden', nextMode.id === 'world');
+  if (nextMode.id === 'world') selectedRegionId = progress.state.activeRegionId;
+  updateCard();
   showModeTitle(nextMode.label);
 
   cameraTransition = {
-    startedAt: clock.elapsedTime,
+    startedAt: elapsedTime,
     duration: 0.8,
     fromPosition,
     toPosition: destination.position,
@@ -203,23 +247,23 @@ function beginModeTransition(nextIndex) {
   };
 }
 
-function focusIsland(islandId) {
+function focusIsland(islandId, duration = 0.8) {
   const island = islandById.get(islandId);
-  if (!island || island.regionId !== world.activeRegion.id) return;
+  if (!island || island.regionId !== world.activeRegion.id) return false;
+  selectedIslandId = islandId;
   world.selectIsland(islandId);
-  updateIslandCard(islandId);
-  if (MODES[modeIndex].id !== 'explore') return;
+  updateCard();
+  if (MODES[modeIndex].id !== 'explore') return true;
 
   const toTarget = world.getIslandPosition(islandId);
   const offset = perspectiveCamera.position.clone().sub(controls.target);
   if (offset.length() < 36 || offset.length() > 150) offset.set(58, 44, 62);
-  const toPosition = toTarget.clone().add(offset);
   controls.enabled = false;
   cameraTransition = {
-    startedAt: clock.elapsedTime,
-    duration: 0.8,
+    startedAt: elapsedTime,
+    duration,
     fromPosition: perspectiveCamera.position.clone(),
-    toPosition,
+    toPosition: toTarget.clone().add(offset),
     fromTarget: cameraTarget.clone(),
     toTarget,
     fromRegionBlend: currentRegionBlend,
@@ -229,32 +273,33 @@ function focusIsland(islandId) {
     nextModeId: 'explore',
     previousModeId: 'explore',
   };
+  return true;
 }
 
-function updateCameraTransition(elapsed) {
+function updateCameraTransition(now) {
   if (!cameraTransition) return;
   const rawProgress = THREE.MathUtils.clamp(
-    (elapsed - cameraTransition.startedAt) / cameraTransition.duration,
+    (now - cameraTransition.startedAt) / cameraTransition.duration,
     0,
     1,
   );
-  const progress = easeInOutCubic(rawProgress);
+  const progressAmount = easeInOutCubic(rawProgress);
   activeCamera.position.lerpVectors(
     cameraTransition.fromPosition,
     cameraTransition.toPosition,
-    progress,
+    progressAmount,
   );
-  cameraTarget.lerpVectors(cameraTransition.fromTarget, cameraTransition.toTarget, progress);
+  cameraTarget.lerpVectors(cameraTransition.fromTarget, cameraTransition.toTarget, progressAmount);
   activeCamera.lookAt(cameraTarget);
   currentRegionBlend = THREE.MathUtils.lerp(
     cameraTransition.fromRegionBlend,
     cameraTransition.toRegionBlend,
-    progress,
+    progressAmount,
   );
   currentWorldBlend = THREE.MathUtils.lerp(
     cameraTransition.fromWorldBlend,
     cameraTransition.toWorldBlend,
-    progress,
+    progressAmount,
   );
   world.setMapBlend(currentRegionBlend, currentWorldBlend);
   transitionShade.classList.toggle('is-midpoint', rawProgress > 0.28 && rawProgress < 0.72);
@@ -265,7 +310,7 @@ function updateCameraTransition(elapsed) {
     transitionShade.classList.remove('is-midpoint');
     if (completedMode === 'explore') {
       controls.target.copy(cameraTarget);
-      controls.enabled = true;
+      controls.enabled = !inputLocked;
       controls.update();
     }
   }
@@ -273,14 +318,13 @@ function updateCameraTransition(elapsed) {
 
 function getCameraDestination(modeId) {
   if (modeId === 'region') {
-    const target = new THREE.Vector3(8, 3, 16);
+    const target = new THREE.Vector3(...world.activeRegion.position).add(new THREE.Vector3(8, 3, 16));
     return { position: target.clone().add(new THREE.Vector3(0, 225, 0)), target };
   }
   if (modeId === 'world') {
-    const target = worldCenter.clone();
-    return { position: target.clone().add(new THREE.Vector3(0, 680, 0)), target };
+    return { position: worldCenter.clone().add(new THREE.Vector3(0, 680, 0)), target: worldCenter.clone() };
   }
-  const target = world.getIslandPosition(world.selectedIslandId);
+  const target = world.getIslandPosition(selectedIslandId);
   return { position: target.clone().add(new THREE.Vector3(64, 48, 70)), target };
 }
 
@@ -290,18 +334,21 @@ function getCamera(modeId) {
   return perspectiveCamera;
 }
 
-function applyCameraPreset(presetId) {
+async function applyCameraPreset(presetId) {
   if (!presetId) {
     window.__CAMERA_PRESET_READY__ = null;
+    window.__QA_STATE_READY__ = null;
     return;
   }
   const preset = CAMERA_PRESETS[presetId];
   if (!preset) {
     console.warn(`[camera-preset] Bilinmeyen preset: ${presetId}`);
     window.__CAMERA_PRESET_READY__ = 'invalid';
+    window.__QA_STATE_READY__ = 'invalid';
     return;
   }
 
+  prepareQaState(preset.qaState);
   const nextIndex = MODES.findIndex((mode) => mode.id === preset.modeId);
   const mode = MODES[nextIndex];
   modeIndex = nextIndex;
@@ -311,6 +358,8 @@ function applyCameraPreset(presetId) {
   currentWorldBlend = mode.worldBlend;
 
   if (preset.islandId) {
+    selectedIslandId = preset.islandId;
+    world.selectIsland(preset.islandId);
     const islandPosition = world.getIslandPosition(preset.islandId);
     cameraTarget.copy(islandPosition).add(preset.targetOffset);
     activeCamera.position.copy(islandPosition).add(preset.positionOffset);
@@ -329,9 +378,33 @@ function applyCameraPreset(presetId) {
   modeLabel.textContent = mode.label;
   modeIcon.textContent = mode.icon;
   modeButton.setAttribute('aria-label', `Kamera modu: ${mode.label}`);
-  islandCard.classList.toggle('is-hidden', mode.id === 'world');
   world.setMapBlend(currentRegionBlend, currentWorldBlend);
+  updateCard();
+  updateRegionLabels();
+  if (preset.qaState === 'puzzle-room') {
+    await openPuzzleRoom(islandById.get('helios-01'), { instant: true, pauseRender: false });
+  }
+  window.__QA_STATE_READY__ = presetId;
   window.__CAMERA_PRESET_READY__ = presetId;
+}
+
+function prepareQaState(qaState) {
+  if (qaState === 'solved-bridge') {
+    const result = progress.solveIsland('helios-03');
+    result.openedBridgeIds.forEach((bridgeId) => world.setBridgeState(bridgeId, 'open'));
+  }
+  if (qaState === 'region-2') {
+    progress.solveIsland('helios-05');
+    progress.setActiveRegion('khepri');
+    world.createDetailedRegion('khepri');
+    world.syncProgress(progress.state);
+    selectedIslandId = progress.state.currentIslandId;
+    selectedRegionId = 'khepri';
+    world.selectIsland(selectedIslandId);
+    world.moveCharacterTo(selectedIslandId, elapsedTime, 0);
+    regionName.textContent = world.activeRegion.name;
+    rebuildIslandLabels();
+  }
 }
 
 function resize() {
@@ -356,6 +429,7 @@ function configureOrthographic(camera, minimumHalfHeight, requiredHalfWidth, asp
 }
 
 function onPointerDown(event) {
+  if (inputLocked) return;
   pointerStart = {
     id: event.pointerId,
     x: event.clientX,
@@ -365,14 +439,14 @@ function onPointerDown(event) {
 }
 
 function onPointerUp(event) {
-  if (!pointerStart || pointerStart.id !== event.pointerId || cameraTransition) {
+  if (!pointerStart || pointerStart.id !== event.pointerId || cameraTransition || regionFlight || inputLocked) {
     pointerStart = null;
     return;
   }
   const movement = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
-  const elapsed = performance.now() - pointerStart.time;
+  const duration = performance.now() - pointerStart.time;
   pointerStart = null;
-  if (movement > 13 || elapsed > 650) return;
+  if (movement > 13 || duration > 650) return;
   handleWorldTap(event.clientX, event.clientY);
 }
 
@@ -409,8 +483,9 @@ function handleWorldTap(clientX, clientY) {
       .filter((hit) => hit.object.visible && hit.object.parent?.visible !== false);
     const bridgeVisual = world.getBridgeHit(bridgeHits);
     if (bridgeVisual) {
-      bridgeVisual.toggle();
-      showToast(`${bridgeVisual.bridge.id}: ${bridgeVisual.state === 'open' ? 'açık' : 'kapalı'}`);
+      const nextState = bridgeVisual.state === 'open' ? 'closed' : 'open';
+      progress.setBridgeState(bridgeVisual.bridge.id, nextState);
+      showToast(`${bridgeVisual.bridge.id}: ${nextState === 'open' ? 'açık' : 'kapalı'}`);
       return;
     }
   }
@@ -424,17 +499,286 @@ function handleWorldTap(clientX, clientY) {
     }
   }
 
-  const regionHits = raycaster.intersectObjects([...world.regionNodes.values()], false)
-    .filter((hit) => hit.object.visible);
-  if (regionHits[0]?.object.userData.locked) showToast('Bu bölge henüz kilitli');
+  const regionHit = raycaster.intersectObjects([...world.regionNodes.values()], false)
+    .filter((hit) => hit.object.visible)[0];
+  if (regionHit) selectRegion(regionHit.object.userData.regionId);
 }
 
-function updateIslandCard(islandId) {
-  const island = islandById.get(islandId);
-  if (!island) return;
+function selectRegion(regionId) {
+  selectedRegionId = regionId;
+  updateCard();
+  if (!progress.isRegionReachable(regionId)) showToast('Bu bölge henüz kilitli');
+}
+
+function updateCard() {
+  cardActionHandler = null;
+  cardAction.hidden = true;
+  islandCard.classList.remove('is-locked', 'is-solved');
+  if (MODES[modeIndex].id === 'world') {
+    updateRegionCard();
+    return;
+  }
+  const island = islandById.get(selectedIslandId);
+  if (!island || island.regionId !== progress.state.activeRegionId) {
+    islandCard.classList.add('is-hidden');
+    return;
+  }
+  islandCard.classList.remove('is-hidden');
+  cardEyebrow.textContent = 'SEÇİLİ ADA';
   islandName.textContent = island.name;
+  difficulty.hidden = false;
   difficultyDots.textContent = `${'●'.repeat(island.difficulty)}${'○'.repeat(5 - island.difficulty)}`;
   difficulty.setAttribute('aria-label', `Zorluk: ${island.difficulty} / 5`);
+  const solved = progress.state.solvedIslands.has(island.id);
+  const reachable = progress.isIslandReachable(island.id);
+  if (!reachable) {
+    islandCard.classList.add('is-locked');
+    islandStatus.textContent = 'Kilitli — önce komşu adayı çöz';
+    return;
+  }
+  if (solved) {
+    islandCard.classList.add('is-solved');
+    islandStatus.textContent = '✓ Çözüldü';
+    showCardAction('Tekrar oyna', () => enterIsland(island));
+    return;
+  }
+  islandStatus.textContent = 'Erişilebilir';
+  showCardAction('Gir', () => enterIsland(island));
+}
+
+function updateRegionCard() {
+  const region = regionById.get(selectedRegionId);
+  if (!region) {
+    islandCard.classList.add('is-hidden');
+    return;
+  }
+  islandCard.classList.remove('is-hidden');
+  cardEyebrow.textContent = 'SEÇİLİ BÖLGE';
+  islandName.textContent = region.name;
+  difficulty.hidden = true;
+  if (region.id === progress.state.activeRegionId) {
+    islandStatus.textContent = 'Aktif bölge';
+    return;
+  }
+  const directBridge = world.getRegionBridge(progress.state.activeRegionId, region.id, true);
+  if (directBridge && progress.isRegionReachable(region.id)) {
+    islandStatus.textContent = 'Açık bölge köprüsüyle erişilebilir';
+    showCardAction('Bölgeye geç', () => beginRegionTransition(region.id, directBridge));
+    return;
+  }
+  islandCard.classList.add('is-locked');
+  islandStatus.textContent = progress.isRegionReachable(region.id)
+    ? 'Bu bölgeye önce komşu bölgeden geç'
+    : 'Kilitli — çıkış adasını çöz';
+}
+
+function showCardAction(label, handler) {
+  cardAction.textContent = label;
+  cardAction.hidden = false;
+  cardActionHandler = handler;
+}
+
+async function enterIsland(island) {
+  if (inputLocked || !progress.isIslandReachable(island.id)) return;
+  setInputLocked(true);
+  if (progress.state.currentIslandId !== island.id) {
+    progress.setCurrentIsland(island.id);
+    await world.moveCharacterTo(island.id, elapsedTime, 0.8);
+  }
+  await openPuzzleRoom(island);
+  setInputLocked(false);
+}
+
+async function openPuzzleRoom(island, { instant = false, pauseRender = true } = {}) {
+  if (puzzleOpen) return;
+  const puzzle = getPuzzle(island.puzzleType);
+  if (!puzzle) {
+    showToast('Bu bulmaca türü kayıtlı değil');
+    return;
+  }
+  puzzleOpen = true;
+  activePuzzle = puzzle;
+  activePuzzleIsland = island;
+  const spec = puzzle.generate(createPuzzleSeed('local', island.id), island.difficulty);
+  puzzleRoom.hidden = false;
+  puzzleRoom.setAttribute('aria-hidden', 'false');
+  puzzle.mount(puzzleContainer, spec, {
+    island,
+    onSolve: () => handlePuzzleSolve(island),
+    onExit: () => closePuzzleRoom(),
+  });
+  if (instant) {
+    puzzleRoom.style.transition = 'none';
+    puzzleRoom.classList.add('is-open');
+    puzzleRoom.getBoundingClientRect();
+    puzzleRoom.style.removeProperty('transition');
+  } else {
+    await nextFrame();
+    puzzleRoom.classList.add('is-open');
+    await wait(400);
+  }
+  if (puzzleOpen && pauseRender) pauseWorldRendering();
+}
+
+async function closePuzzleRoom() {
+  if (!puzzleOpen || puzzleClosing) return;
+  puzzleClosing = true;
+  if (renderPaused) resumeWorldRendering();
+  activePuzzle?.unmount();
+  puzzleRoom.classList.remove('is-open');
+  await wait(400);
+  puzzleRoom.hidden = true;
+  puzzleRoom.setAttribute('aria-hidden', 'true');
+  puzzleOpen = false;
+  puzzleClosing = false;
+  activePuzzle = null;
+  activePuzzleIsland = null;
+}
+
+async function handlePuzzleSolve(island) {
+  if (puzzleClosing || activePuzzleIsland?.id !== island.id) return;
+  await closePuzzleRoom();
+  const result = progress.solveIsland(island.id);
+  result.openedBridgeIds.forEach((bridgeId) => {
+    world.setBridgeState(bridgeId, 'open', { animate: true, startedAt: elapsedTime, duration: 1.2 });
+  });
+  if (result.focusIslandId) focusIsland(result.focusIslandId, 1.5);
+}
+
+function pauseWorldRendering() {
+  if (renderPaused) return;
+  pipeline.renderer.setAnimationLoop(null);
+  renderPaused = true;
+  window.__RENDER_PAUSED__ = true;
+}
+
+function resumeWorldRendering() {
+  if (!renderPaused) return;
+  clock.getDelta();
+  renderPaused = false;
+  window.__RENDER_PAUSED__ = false;
+  pipeline.renderer.setAnimationLoop(renderFrame);
+}
+
+function solveSelectedIslandForDebug() {
+  const island = islandById.get(selectedIslandId);
+  if (!island || island.regionId !== progress.state.activeRegionId) return;
+  const result = progress.solveIsland(island.id);
+  result.openedBridgeIds.forEach((bridgeId) => {
+    world.setBridgeState(bridgeId, 'open', { animate: true, startedAt: elapsedTime, duration: 1.2 });
+  });
+  if (result.focusIslandId) focusIsland(result.focusIslandId, 1.5);
+}
+
+function solveActiveRegionForDebug() {
+  progress.solveRegion(progress.state.activeRegionId);
+  world.syncProgress(progress.state);
+  showToast('Aktif bölge tamamen çözüldü');
+}
+
+function beginRegionTransition(targetRegionId, bridgeVisual) {
+  if (inputLocked || regionFlight || !bridgeVisual || bridgeVisual.state !== 'open') return;
+  setInputLocked(true);
+  cameraTransition = null;
+  controls.enabled = false;
+  activeCamera = perspectiveCamera;
+  const reverse = bridgeVisual.bridge.to === progress.state.activeRegionId;
+  regionFlight = {
+    targetRegionId,
+    bridgeVisual,
+    reverse,
+    startedAt: elapsedTime,
+    duration: 2.5,
+    midpointLoaded: false,
+  };
+  transitionShade.classList.add('is-midpoint');
+}
+
+function updateRegionFlight(now) {
+  const raw = THREE.MathUtils.clamp((now - regionFlight.startedAt) / regionFlight.duration, 0, 1);
+  const eased = easeInOutCubic(raw);
+  const curveT = regionFlight.reverse ? 1 - eased : eased;
+  const lookT = THREE.MathUtils.clamp(
+    curveT + (regionFlight.reverse ? -0.018 : 0.018),
+    0,
+    1,
+  );
+  const point = regionFlight.bridgeVisual.curve.getPoint(curveT);
+  const lookPoint = regionFlight.bridgeVisual.curve.getPoint(lookT);
+  const tangent = lookPoint.clone().sub(point).normalize();
+  const side = new THREE.Vector3(-tangent.z, 0, tangent.x).multiplyScalar(22 * Math.sin(raw * Math.PI));
+  perspectiveCamera.position.copy(point).add(side).add(new THREE.Vector3(0, 24 + Math.sin(raw * Math.PI) * 12, 0));
+  cameraTarget.copy(lookPoint).add(new THREE.Vector3(0, 2, 0));
+  perspectiveCamera.lookAt(cameraTarget);
+  currentWorldBlend = 1 - eased;
+  currentRegionBlend = 0;
+  world.setMapBlend(0, currentWorldBlend);
+
+  if (!regionFlight.midpointLoaded && raw >= 0.5) {
+    regionFlight.midpointLoaded = true;
+    progress.setActiveRegion(regionFlight.targetRegionId);
+    world.createDetailedRegion(regionFlight.targetRegionId);
+    world.syncProgress(progress.state);
+    selectedIslandId = progress.state.currentIslandId;
+    selectedRegionId = progress.state.activeRegionId;
+    world.selectIsland(selectedIslandId);
+    world.moveCharacterTo(selectedIslandId, now, 0);
+    regionName.textContent = world.activeRegion.name;
+    rebuildIslandLabels();
+    updateRegionLabels();
+  }
+
+  if (raw >= 1) finishRegionTransition();
+}
+
+function finishRegionTransition() {
+  regionFlight = null;
+  transitionShade.classList.remove('is-midpoint');
+  modeIndex = 0;
+  activeCamera = perspectiveCamera;
+  currentRegionBlend = 0;
+  currentWorldBlend = 0;
+  document.body.dataset.mode = 'explore';
+  modeLabel.textContent = MODES[0].label;
+  modeIcon.textContent = MODES[0].icon;
+  modeButton.setAttribute('aria-label', 'Kamera modu: Gezinti');
+  world.setMapBlend(0, 0);
+  const target = world.getIslandPosition(selectedIslandId);
+  cameraTarget.copy(target);
+  controls.target.copy(target);
+  controls.enabled = true;
+  controls.update();
+  setInputLocked(false);
+  updateCard();
+}
+
+function setInputLocked(locked) {
+  inputLocked = locked;
+  document.body.dataset.inputLocked = String(locked);
+  modeButton.disabled = locked;
+  cardAction.disabled = locked;
+}
+
+function rebuildIslandLabels() {
+  islandLabelsContainer.replaceChildren();
+  islandLabelElements = new Map();
+  world.activeIslands.forEach((island) => {
+    const label = createLabel(island.name, `Zorluk ${island.difficulty}`);
+    islandLabelsContainer.append(label);
+    islandLabelElements.set(island.id, label);
+  });
+}
+
+function updateRegionLabels() {
+  const reachable = progress.getReachableRegionIds();
+  worldData.regions.forEach((region) => {
+    const label = regionLabelElements.get(region.id);
+    if (!label) return;
+    const subtitle = label.querySelector('small');
+    const active = region.id === progress.state.activeRegionId;
+    subtitle.textContent = active ? 'Aktif bölge' : reachable.has(region.id) ? 'Erişilebilir' : 'Kilitli';
+    label.classList.toggle('is-locked', !reachable.has(region.id));
+  });
 }
 
 function updateLabels() {
@@ -454,6 +798,7 @@ function updateLabels() {
 }
 
 function positionLabel(element, worldPosition, camera) {
+  if (!element) return;
   const projected = worldPosition.clone().project(camera);
   const visible = projected.z > -1 && projected.z < 1
     && Math.abs(projected.x) < 1.08 && Math.abs(projected.y) < 1.08;
@@ -497,6 +842,42 @@ function updateFps(delta) {
   fpsElement.style.color = fps >= 45 ? '#aef7bf' : fps >= 28 ? '#ffe19b' : '#ff9c91';
   fpsFrames = 0;
   fpsElapsed = 0;
+}
+
+function refreshDiagnostics() {
+  const gl = pipeline.renderer.getContext();
+  const rendererDebugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+  window.__WORLD_DIAGNOSTICS__ = {
+    threeRevision: THREE.REVISION,
+    regionCount: worldData.regions.length,
+    islandCount: worldData.islands.length,
+    activeRegionId: world.activeRegion.id,
+    activeIslandInstances: world.activeIslands.length,
+    landmarkInstances: world.landmarks.counts,
+    islandGeometry: world.geometryDiagnostics,
+    bridgeGeometryChecks: world.bridgeGeometryChecks,
+    detailedRegionCount: 1,
+    progress: {
+      solvedIslands: [...progress.state.solvedIslands],
+      openBridges: [...progress.state.openBridges],
+      activeRegionId: progress.state.activeRegionId,
+      currentIslandId: progress.state.currentIslandId,
+    },
+    cameraTransitionMilliseconds: 800,
+    debugMode,
+    cameraPresetId,
+    renderer: rendererDebugInfo
+      ? gl.getParameter(rendererDebugInfo.UNMASKED_RENDERER_WEBGL)
+      : gl.getParameter(gl.RENDERER),
+  };
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 function easeInOutCubic(value) {

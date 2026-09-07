@@ -13,6 +13,9 @@ const presets = [
   ['zeynep-side', '02-zeynep-side.png'],
   ['region', '03-region-map.png'],
   ['world', '04-world-map.png'],
+  ['puzzle-room', '05-puzzle-room.png'],
+  ['solved-bridge', '06-solved-bridge.png'],
+  ['region-2', '07-region-2.png'],
 ];
 
 let serverProcess;
@@ -30,12 +33,17 @@ try {
   });
   const page = await context.newPage();
   const browserErrors = [];
+  const browserFailures = [];
   page.on('console', (message) => {
     if (message.type() === 'error' || message.type() === 'warning' || message.text().startsWith('[debug-hit]')) {
       browserErrors.push(`[console:${message.type()}] ${message.text()}`);
     }
+    if (message.type() === 'error') browserFailures.push(`[console:error] ${message.text()}`);
   });
-  page.on('pageerror', (error) => browserErrors.push(`[pageerror] ${error.message}`));
+  page.on('pageerror', (error) => {
+    browserErrors.push(`[pageerror] ${error.message}`);
+    browserFailures.push(`[pageerror] ${error.message}`);
+  });
 
   for (const [preset, filename] of presets) {
     const url = new URL(baseUrl);
@@ -45,11 +53,13 @@ try {
     await page.waitForFunction(
       (expectedPreset) => window.__WORLD_READY__ === true
         && window.__CAMERA_PRESET_READY__ === expectedPreset
+        && window.__QA_STATE_READY__ === expectedPreset
         && window.__QA_FRAME_COUNT__ >= 3,
       preset,
       { timeout: 30_000 },
     );
     await page.waitForFunction(() => getComputedStyle(document.querySelector('#loading')).opacity === '0');
+    await assertPresetState(page, preset);
     await page.screenshot({
       path: `${outputDirectory}/${filename}`,
       type: 'png',
@@ -60,6 +70,7 @@ try {
         await page.mouse.click(point.x, point.y);
         await page.waitForTimeout(80);
       }
+      await runPuzzlePauseSmoke(page);
     }
     console.log(`qa/${filename} ← ${url.href}`);
   }
@@ -71,6 +82,9 @@ try {
   if (browserErrors.length > 0) {
     console.log('Tarayıcı uyarıları:');
     browserErrors.forEach((message) => console.log(`  ${message}`));
+  }
+  if (browserFailures.length > 0) {
+    throw new Error(`Tarayıcı çalışma hataları bulundu:\n${browserFailures.join('\n')}`);
   }
 } finally {
   await browser?.close();
@@ -154,4 +168,31 @@ function parseProbePoints(argument) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`Geçersiz probe noktası: ${pair}`);
     return { x, y };
   });
+}
+
+async function assertPresetState(page, preset) {
+  if (preset === 'puzzle-room') {
+    await page.locator('#puzzle-room.is-open').waitFor({ state: 'visible' });
+    await page.getByRole('button', { name: 'Çöz' }).waitFor({ state: 'visible' });
+    await page.getByRole('button', { name: 'Geri' }).waitFor({ state: 'visible' });
+  }
+  if (preset === 'solved-bridge') {
+    await page.waitForFunction(() => document.querySelector('#island-status')?.textContent.includes('Çözüldü'));
+  }
+  if (preset === 'region-2') {
+    await page.waitForFunction(() => document.querySelector('#region-name')?.textContent === 'Khepri Yelkenleri');
+  }
+}
+
+async function runPuzzlePauseSmoke(page) {
+  const frameCount = await page.evaluate(() => window.__QA_FRAME_COUNT__);
+  await page.getByRole('button', { name: 'Gir' }).click();
+  await page.waitForFunction(() => window.__RENDER_PAUSED__ === true);
+  await page.getByRole('button', { name: 'Geri' }).click();
+  await page.waitForFunction(
+    (previousFrameCount) => window.__RENDER_PAUSED__ === false
+      && document.querySelector('#puzzle-room').hidden
+      && window.__QA_FRAME_COUNT__ > previousFrameCount,
+    frameCount,
+  );
 }

@@ -53,7 +53,7 @@ for (const island of world.islands) {
   assert.ok(Math.abs(island.radius * 100 - Math.round(island.radius * 100)) < 1e-9, `${island.id}: radius en fazla iki ondalık içermeli`);
   const originalRadius = island.radius / radiusScale;
   assert.ok(Math.abs(originalRadius * 10 - Math.round(originalRadius * 10)) < 1e-9, `${island.id}: radius eski değerin tam 1.6 katı olmalı`);
-  assert.equal(island.puzzleType, null, `${island.id}: bu checkpoint'te puzzleType null olmalı`);
+  assert.equal(island.puzzleType, 'placeholder', `${island.id}: puzzleType placeholder olmalı`);
   assert.ok(Number.isInteger(island.difficulty) && island.difficulty >= 1 && island.difficulty <= 5, `${island.id}: difficulty 1–5 olmalı`);
   assert.ok(['player', 'fixed'].includes(island.seedMode), `${island.id}: geçersiz seedMode`);
   assert.ok(landmarkTypes.has(island.landmark), `${island.id}: geçersiz veya eksik landmark`);
@@ -116,6 +116,12 @@ for (const bridge of world.regionBridges) {
   assert.ok(regionIds.has(bridge.from) && regionIds.has(bridge.to), `${bridge.id}: geçersiz bölge referansı`);
   assert.notEqual(bridge.from, bridge.to, `${bridge.id}: köprü kendisine bağlanamaz`);
   assert.ok(['open', 'closed'].includes(bridge.state), `${bridge.id}: geçersiz state`);
+  assert.ok(islandIds.has(bridge.unlockedBy), `${bridge.id}: geçersiz unlockedBy adası`);
+  assert.equal(
+    islandById.get(bridge.unlockedBy).regionId,
+    bridge.from,
+    `${bridge.id}: unlockedBy adası from bölgesinde olmalı`,
+  );
   const distance = euclidean(regionById.get(bridge.from).position, regionById.get(bridge.to).position);
   assert.ok(distance >= 200 && distance <= 300, `${bridge.id}: bölge merkezi mesafesi ${distance.toFixed(1)}, 200–300 dışında`);
   degree.set(bridge.from, degree.get(bridge.from) + 1);
@@ -123,7 +129,7 @@ for (const bridge of world.regionBridges) {
   adjacency.get(bridge.from).push(bridge.to);
   adjacency.get(bridge.to).push(bridge.from);
 }
-assert.ok(world.regionBridges.every((bridge) => bridge.state === 'closed'), 'CP1 boyunca bütün bölge köprüleri kapalı olmalı');
+assert.ok(world.regionBridges.every((bridge) => bridge.state === 'closed'), 'Bütün bölge köprüleri başlangıçta kapalı olmalı');
 
 const visited = new Set();
 const queue = [world.regions[0].id];

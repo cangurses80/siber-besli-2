@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "shot": "node scripts/shot.mjs",
-    "verify": "node scripts/verify-world.mjs && node scripts/verify-project.mjs && vite build"
+    "verify": "node scripts/verify-world.mjs && node scripts/verify-progress.mjs && node scripts/verify-project.mjs && vite build"
   },
   "dependencies": {
     "three": "0.179.1"
