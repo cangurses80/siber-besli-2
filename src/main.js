@@ -1,6 +1,19 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import worldData from './world.json';
+import { createPlayerPersistence } from './firebase.js';
+import { generateNickname } from './nicknames.js';
+import {
+  createInitialProgressState,
+  createNewPlayerDocument,
+  DELETE_FIELD_MARKER,
+  hydratePlayerDocument,
+  recordPuzzleAttempt,
+  recordPuzzleSolve,
+  resetPlayerProgress,
+  serializePlayerState,
+  SERVER_TIMESTAMP_MARKER,
+} from './playerStore.js';
 import { createProgress } from './progress.js';
 import { createPuzzleSeed, getPuzzle } from './puzzles/index.js';
 import { createRenderPipeline } from './render/pipeline.js';
@@ -31,10 +44,37 @@ const debugSolveIsland = document.querySelector('#debug-solve-island');
 const debugSolveRegion = document.querySelector('#debug-solve-region');
 const puzzleRoom = document.querySelector('#puzzle-room');
 const puzzleContainer = document.querySelector('#puzzle-container');
+const syncBadge = document.querySelector('#sync-badge');
+const nicknameRoom = document.querySelector('#nickname-room');
+const nicknameValue = document.querySelector('#nickname-value');
+const nicknameRegenerate = document.querySelector('#nickname-regenerate');
+const nicknameConfirm = document.querySelector('#nickname-confirm');
+const nicknameError = document.querySelector('#nickname-error');
+const debugIdentity = document.querySelector('#debug-identity');
+const debugResetProgress = document.querySelector('#debug-reset-progress');
 
 const searchParams = new URLSearchParams(window.location.search);
 const debugMode = searchParams.get('debug') === '1';
 const cameraPresetId = searchParams.get('cam');
+const forceOffline = debugMode
+  && (searchParams.get('firebase') === 'off' || cameraPresetId === 'nickname');
+loading.textContent = 'İlerleme yükleniyor…';
+const persistence = await createPlayerPersistence({ forceOffline });
+const loadedPlayer = await persistence.loadPlayer();
+const hydratedPlayer = loadedPlayer.ok && loadedPlayer.exists
+  ? hydratePlayerDocument(worldData, loadedPlayer.data)
+  : hydratePlayerDocument(worldData);
+const playerId = persistence.playerId;
+let playerNickname = hydratedPlayer.nickname;
+let puzzleRecords = hydratedPlayer.puzzleRecords;
+let nicknameCandidate = '';
+let nicknameConfirming = false;
+let nicknameRequired = persistence.mode === 'firebase'
+  && loadedPlayer.ok
+  && (!loadedPlayer.exists || !playerNickname);
+let newPlayerDocument = persistence.mode === 'firebase' && loadedPlayer.ok && !loadedPlayer.exists;
+let heartbeatTimer = null;
+const puzzleAttemptStartedAt = new Map();
 const clock = new THREE.Clock();
 const placeholderScene = new THREE.Scene();
 const perspectiveCamera = new THREE.PerspectiveCamera(48, 1, 0.1, 1500);
@@ -46,8 +86,12 @@ worldCamera.up.set(0, 0, -1);
 
 const pipeline = createRenderPipeline(canvas, placeholderScene, perspectiveCamera);
 const textures = createWorldTextureLibrary(pipeline.renderer);
-const progress = createProgress(worldData);
+const progress = createProgress(worldData, hydratedPlayer.progressState);
 const world = createWorldScene({ renderer: pipeline.renderer, textures, data: worldData, debugMode });
+if (progress.state.activeRegionId !== worldData.regions[0].id) {
+  world.createDetailedRegion(progress.state.activeRegionId);
+  world.moveCharacterTo(progress.state.currentIslandId, 0, 0);
+}
 world.syncProgress(progress.state);
 
 const controls = new OrbitControls(perspectiveCamera, canvas);
@@ -108,6 +152,13 @@ const CAMERA_PRESETS = {
     targetOffset: new THREE.Vector3(0, 0.4, 0),
     qaState: 'region-2',
   },
+  nickname: {
+    modeId: 'explore',
+    islandId: 'helios-01',
+    positionOffset: new THREE.Vector3(28, 68, 30),
+    targetOffset: new THREE.Vector3(0, 0.4, 0),
+    qaState: 'nickname',
+  },
 };
 
 let modeIndex = 0;
@@ -135,7 +186,11 @@ let renderPaused = false;
 let islandLabelElements = new Map();
 const regionLabelElements = new Map();
 
+persistence.subscribe(updateSyncStatus);
+updateIdentityDebug();
+
 rebuildIslandLabels();
+regionName.textContent = world.activeRegion.name;
 worldData.regions.forEach((region) => {
   const label = createLabel(region.name, 'Kilitli', true);
   regionLabelsContainer.append(label);
@@ -162,7 +217,14 @@ modeButton.addEventListener('click', () => {
 cardAction.addEventListener('click', () => cardActionHandler?.());
 debugSolveIsland.addEventListener('click', solveSelectedIslandForDebug);
 debugSolveRegion.addEventListener('click', solveActiveRegionForDebug);
+debugResetProgress.addEventListener('click', resetProgressForDebug);
+nicknameRegenerate.addEventListener('click', regenerateNickname);
+nicknameConfirm.addEventListener('click', confirmNickname);
 window.addEventListener('resize', resize, { passive: true });
+window.addEventListener('pagehide', () => {
+  if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+  persistence.dispose();
+}, { once: true });
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && puzzleOpen && !puzzleClosing) closePuzzleRoom();
 });
@@ -183,6 +245,8 @@ world.ready
     loading.classList.add('is-done');
     window.__WORLD_READY__ = true;
     await applyCameraPreset(cameraPresetId);
+    if (nicknameRequired && cameraPresetId !== 'nickname') await showNicknameRoom();
+    if (!nicknameRequired) startHeartbeat();
     refreshDiagnostics();
   })
   .catch((error) => {
@@ -384,6 +448,9 @@ async function applyCameraPreset(presetId) {
   if (preset.qaState === 'puzzle-room') {
     await openPuzzleRoom(islandById.get('helios-01'), { instant: true, pauseRender: false });
   }
+  if (preset.qaState === 'nickname') {
+    await showNicknameRoom({ instant: true, qa: true });
+  }
   window.__QA_STATE_READY__ = presetId;
   window.__CAMERA_PRESET_READY__ = presetId;
 }
@@ -485,6 +552,7 @@ function handleWorldTap(clientX, clientY) {
     if (bridgeVisual) {
       const nextState = bridgeVisual.state === 'open' ? 'closed' : 'open';
       progress.setBridgeState(bridgeVisual.bridge.id, nextState);
+      queuePlayerSave('debug-bridge-state');
       showToast(`${bridgeVisual.bridge.id}: ${nextState === 'open' ? 'açık' : 'kapalı'}`);
       return;
     }
@@ -599,7 +667,10 @@ async function openPuzzleRoom(island, { instant = false, pauseRender = true } = 
   puzzleOpen = true;
   activePuzzle = puzzle;
   activePuzzleIsland = island;
-  const spec = puzzle.generate(createPuzzleSeed('local', island.id), island.difficulty);
+  puzzleAttemptStartedAt.set(island.id, performance.now());
+  puzzleRecords = recordPuzzleAttempt(puzzleRecords, island.id);
+  queuePlayerSave('puzzle-attempt', {}, island.id);
+  const spec = puzzle.generate(createPuzzleSeed(playerId, island.id), island.difficulty);
   puzzleRoom.hidden = false;
   puzzleRoom.setAttribute('aria-hidden', 'false');
   puzzle.mount(puzzleContainer, spec, {
@@ -637,11 +708,16 @@ async function closePuzzleRoom() {
 
 async function handlePuzzleSolve(island) {
   if (puzzleClosing || activePuzzleIsland?.id !== island.id) return;
+  const startedAt = puzzleAttemptStartedAt.get(island.id) ?? performance.now();
+  const durationMs = Math.max(0, performance.now() - startedAt);
+  puzzleRecords = recordPuzzleSolve(puzzleRecords, island.id, durationMs);
+  puzzleAttemptStartedAt.delete(island.id);
   await closePuzzleRoom();
   const result = progress.solveIsland(island.id);
   result.openedBridgeIds.forEach((bridgeId) => {
     world.setBridgeState(bridgeId, 'open', { animate: true, startedAt: elapsedTime, duration: 1.2 });
   });
+  queuePlayerSave('island-solved', {}, island.id);
   if (result.focusIslandId) focusIsland(result.focusIslandId, 1.5);
 }
 
@@ -660,19 +736,27 @@ function resumeWorldRendering() {
   pipeline.renderer.setAnimationLoop(renderFrame);
 }
 
-function solveSelectedIslandForDebug() {
+async function solveSelectedIslandForDebug() {
   const island = islandById.get(selectedIslandId);
   if (!island || island.regionId !== progress.state.activeRegionId) return;
   const result = progress.solveIsland(island.id);
+  if (!puzzleRecords[island.id]) puzzleRecords = recordPuzzleAttempt(puzzleRecords, island.id);
+  puzzleRecords = recordPuzzleSolve(puzzleRecords, island.id, 0);
   result.openedBridgeIds.forEach((bridgeId) => {
     world.setBridgeState(bridgeId, 'open', { animate: true, startedAt: elapsedTime, duration: 1.2 });
   });
+  await persistDebugSolvedIslands([island.id], 'debug-island-solved');
   if (result.focusIslandId) focusIsland(result.focusIslandId, 1.5);
 }
 
-function solveActiveRegionForDebug() {
+async function solveActiveRegionForDebug() {
+  for (const islandId of world.activeRegion.islands) {
+    if (!puzzleRecords[islandId]) puzzleRecords = recordPuzzleAttempt(puzzleRecords, islandId);
+    puzzleRecords = recordPuzzleSolve(puzzleRecords, islandId, 0);
+  }
   progress.solveRegion(progress.state.activeRegionId);
   world.syncProgress(progress.state);
+  await persistDebugSolvedIslands(world.activeRegion.islands, 'debug-region-solved');
   showToast('Aktif bölge tamamen çözüldü');
 }
 
@@ -726,6 +810,7 @@ function updateRegionFlight(now) {
     regionName.textContent = world.activeRegion.name;
     rebuildIslandLabels();
     updateRegionLabels();
+    queuePlayerSave('region-transition');
   }
 
   if (raw >= 1) finishRegionTransition();
@@ -757,6 +842,180 @@ function setInputLocked(locked) {
   document.body.dataset.inputLocked = String(locked);
   modeButton.disabled = locked;
   cardAction.disabled = locked;
+}
+
+async function showNicknameRoom({ instant = false, qa = false } = {}) {
+  if (!nicknameRoom.hidden) return;
+  nicknameConfirming = false;
+  nicknameError.hidden = true;
+  nicknameRegenerate.disabled = false;
+  nicknameConfirm.disabled = false;
+  nicknameConfirm.textContent = 'Bu olsun';
+  nicknameCandidate = generateNickname('', qa ? () => 0 : Math.random);
+  nicknameValue.textContent = nicknameCandidate;
+  nicknameRoom.dataset.qa = String(qa);
+  nicknameRoom.hidden = false;
+  nicknameRoom.setAttribute('aria-hidden', 'false');
+  setInputLocked(true);
+  if (instant) {
+    nicknameRoom.style.transition = 'none';
+    nicknameRoom.classList.add('is-open');
+    nicknameRoom.getBoundingClientRect();
+    nicknameRoom.style.removeProperty('transition');
+  } else {
+    await nextFrame();
+    nicknameRoom.classList.add('is-open');
+    await wait(400);
+  }
+  nicknameRegenerate.focus({ preventScroll: true });
+}
+
+function regenerateNickname() {
+  if (nicknameConfirming) return;
+  nicknameCandidate = generateNickname(nicknameCandidate);
+  nicknameValue.textContent = nicknameCandidate;
+  nicknameError.hidden = true;
+}
+
+async function confirmNickname() {
+  if (!nicknameCandidate || nicknameConfirming) return;
+  nicknameConfirming = true;
+  nicknameError.hidden = true;
+  nicknameRegenerate.disabled = true;
+  nicknameConfirm.disabled = true;
+  nicknameConfirm.textContent = 'Kaydediliyor…';
+  const chosenNickname = nicknameCandidate;
+  const patch = newPlayerDocument
+    ? createNewPlayerDocument(worldData, chosenNickname)
+    : {
+      nickname: chosenNickname,
+      lastSeenAt: SERVER_TIMESTAMP_MARKER,
+      ...serializePlayerState(worldData, progress.state, puzzleRecords),
+    };
+  const result = await persistence.savePlayer(patch, 'nickname-confirmed', {
+    expectedNickname: chosenNickname,
+  });
+  if (!result.ok) {
+    nicknameConfirming = false;
+    nicknameRegenerate.disabled = false;
+    nicknameConfirm.disabled = false;
+    nicknameConfirm.textContent = 'Tekrar dene';
+    nicknameError.textContent = 'Takma ad kaydedilemedi. Bağlantını kontrol edip tekrar dene.';
+    nicknameError.hidden = false;
+    nicknameConfirm.focus({ preventScroll: true });
+    return;
+  }
+
+  playerNickname = chosenNickname;
+  nicknameRequired = false;
+  newPlayerDocument = false;
+  updateIdentityDebug();
+  nicknameRoom.classList.remove('is-open');
+  await wait(400);
+  nicknameRoom.hidden = true;
+  nicknameRoom.setAttribute('aria-hidden', 'true');
+  nicknameConfirming = false;
+  setInputLocked(false);
+  startHeartbeat();
+}
+
+async function queuePlayerSave(reason, overrides = {}, changedIslandId = null) {
+  if (persistence.mode !== 'firebase' || nicknameRequired) return { ok: false, reason: 'disabled' };
+  const serialized = serializePlayerState(worldData, progress.state, puzzleRecords);
+  const { solved, ...progressSnapshot } = serialized;
+  const snapshot = {
+    ...progressSnapshot,
+    lastSeenAt: SERVER_TIMESTAMP_MARKER,
+    ...overrides,
+  };
+  if (changedIslandId && solved[changedIslandId]) {
+    snapshot.solved = { [changedIslandId]: solved[changedIslandId] };
+  }
+  const result = await persistence.savePlayer(snapshot, reason);
+  if (result.ok) reconcilePuzzleRecords(result.data);
+  return result;
+}
+
+async function persistDebugSolvedIslands(islandIds, reason) {
+  if (persistence.mode !== 'firebase' || nicknameRequired) return;
+  const actualCurrentIslandId = progress.state.currentIslandId;
+  for (const islandId of islandIds) {
+    const result = await queuePlayerSave(
+      reason,
+      { currentIslandId: islandId },
+      islandId,
+    );
+    if (!result.ok) return;
+  }
+  await queuePlayerSave(`${reason}-restore-position`, { currentIslandId: actualCurrentIslandId });
+}
+
+function reconcilePuzzleRecords(serverData) {
+  if (!serverData?.solved) return;
+  const serverRecords = hydratePlayerDocument(worldData, serverData).puzzleRecords;
+  for (const [islandId, serverRecord] of Object.entries(serverRecords)) {
+    const localRecord = puzzleRecords[islandId];
+    if (!localRecord) continue;
+    puzzleRecords[islandId] = {
+      solvedAt: localRecord.solvedAt === SERVER_TIMESTAMP_MARKER
+        ? serverRecord.solvedAt
+        : localRecord.solvedAt,
+      durationMs: localRecord.solvedAt === SERVER_TIMESTAMP_MARKER
+        ? serverRecord.durationMs
+        : localRecord.durationMs,
+      attempts: Math.max(localRecord.attempts, serverRecord.attempts),
+    };
+  }
+}
+
+function startHeartbeat() {
+  if (persistence.mode !== 'firebase' || nicknameRequired || heartbeatTimer) return;
+  heartbeatTimer = window.setInterval(() => {
+    void persistence.savePlayer({ lastSeenAt: SERVER_TIMESTAMP_MARKER }, 'heartbeat');
+  }, 60_000);
+}
+
+function updateSyncStatus(status) {
+  syncBadge.textContent = status.label;
+  syncBadge.dataset.status = status.kind;
+  syncBadge.title = status.detail ? `${status.label}: ${status.detail}` : status.label;
+  updateIdentityDebug(status);
+}
+
+function updateIdentityDebug(status = persistence.status) {
+  if (!debugIdentity) return;
+  debugIdentity.textContent = [
+    `Mod: ${persistence.mode === 'firebase' ? 'Firebase' : 'Bellek'}`,
+    `Auth saklama: ${persistence.authPersistence}`,
+    `UID: ${playerId}`,
+    `Takma ad: ${playerNickname || 'onay bekliyor'}`,
+    `Durum: ${status.label}`,
+  ].join('\n');
+}
+
+function resetProgressForDebug() {
+  const previousRecordIds = Object.keys(puzzleRecords);
+  const reset = resetPlayerProgress(worldData);
+  puzzleRecords = reset.puzzleRecords;
+  puzzleAttemptStartedAt.clear();
+  progress.reset();
+  selectedIslandId = progress.state.currentIslandId;
+  selectedRegionId = progress.state.activeRegionId;
+  if (world.activeRegion.id !== progress.state.activeRegionId) {
+    world.createDetailedRegion(progress.state.activeRegionId);
+    rebuildIslandLabels();
+  }
+  world.syncProgress(progress.state);
+  world.selectIsland(selectedIslandId);
+  world.moveCharacterTo(selectedIslandId, elapsedTime, 0);
+  regionName.textContent = world.activeRegion.name;
+  updateRegionLabels();
+  updateCard();
+  const solvedDeletes = Object.fromEntries(
+    previousRecordIds.map((islandId) => [islandId, DELETE_FIELD_MARKER]),
+  );
+  queuePlayerSave('debug-reset', { solved: solvedDeletes });
+  showToast('İlerleme başlangıca döndürüldü');
 }
 
 function rebuildIslandLabels() {

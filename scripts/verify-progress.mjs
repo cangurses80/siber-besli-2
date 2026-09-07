@@ -58,6 +58,20 @@ assert.equal(fresh.state.activeRegionId, 'helios');
 assert.equal(fresh.state.currentIslandId, 'helios-01');
 assert.deepEqual([...fresh.getReachableRegionIds()], ['helios']);
 
+const hydratedProgress = createProgress(world, {
+  solvedIslands: ['helios-01', 'bilinmeyen-ada'],
+  openBridges: ['helios-bridge-03', 'bilinmeyen-kopru'],
+  activeRegionId: 'helios',
+  currentIslandId: 'helios-03',
+});
+assert.ok(hydratedProgress.state.solvedIslands.has('helios-01'));
+assert.equal(hydratedProgress.state.solvedIslands.has('bilinmeyen-ada'), false);
+assert.ok(hydratedProgress.state.openBridges.has('helios-bridge-03'));
+assert.equal(hydratedProgress.state.currentIslandId, 'helios-03');
+assert.equal(hydratedProgress.reset(), true);
+assert.equal(hydratedProgress.state.solvedIslands.size, 0);
+assert.deepEqual([...hydratedProgress.state.openBridges].sort(), ['helios-bridge-01', 'helios-bridge-02']);
+
 console.log('İlerleme modeli doğrulandı');
 console.log('  Başlangıç BFS: helios-01, helios-02, helios-03');
 console.log('  Ada çözümü, idempotentlik, bridge state ve bölge BFS: tamam');

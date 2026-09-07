@@ -29,6 +29,7 @@
       <div id="locked-toast" class="toast" role="status" aria-live="polite">Bu bölge henüz kilitli</div>
       <div id="loading" class="loading" role="status">Dünya kuruluyor…</div>
       <div id="fps" class="fps" hidden>-- FPS</div>
+      <div id="sync-badge" class="sync-badge" data-status="offline" role="status" aria-live="polite">Çevrimdışı</div>
 
       <div id="island-labels" class="island-labels" aria-hidden="true"></div>
       <div id="region-labels" class="region-labels" aria-hidden="true"></div>
@@ -50,8 +51,10 @@
       </section>
 
       <aside id="debug-controls" class="debug-controls" hidden aria-label="Debug kontrolleri">
+        <pre id="debug-identity" class="debug-identity"></pre>
         <button id="debug-solve-island" type="button">Seçili adayı çöz</button>
         <button id="debug-solve-region" type="button">Bölgeyi tamamen çöz</button>
+        <button id="debug-reset-progress" type="button">İlerlemeyi sıfırla</button>
       </aside>
 
       <div id="transition-shade" class="transition-shade"></div>
@@ -59,6 +62,20 @@
       <section id="puzzle-room" class="puzzle-room" aria-hidden="true" hidden>
         <div class="puzzle-room__glow" aria-hidden="true"></div>
         <div id="puzzle-container" class="puzzle-room__content"></div>
+      </section>
+
+      <section id="nickname-room" class="nickname-room" aria-hidden="true" hidden>
+        <div class="nickname-card" role="dialog" aria-modal="true" aria-labelledby="nickname-title">
+          <span class="nickname-card__eyebrow">GÖKYÜZÜ KİMLİĞİN</span>
+          <h1 id="nickname-title">Sana bir takma ad seçtik</h1>
+          <strong id="nickname-value" class="nickname-value">Cesur Baykuş</strong>
+          <p>Gerçek adını paylaşmana gerek yok. Bu ad yalnızca oyun ilerlemenle birlikte saklanır.</p>
+          <p id="nickname-error" class="nickname-error" role="alert" hidden></p>
+          <div class="nickname-actions">
+            <button id="nickname-regenerate" class="nickname-button nickname-button--secondary" type="button">Yeniden üret</button>
+            <button id="nickname-confirm" class="nickname-button nickname-button--primary" type="button">Bu olsun</button>
+          </div>
+        </div>
       </section>
     </main>
     <script type="module" src="/src/main.js"></script>

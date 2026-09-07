@@ -8,6 +8,7 @@ const MOBILE_TEXTURE_HEIGHT = 512;
 const ALPHA_TEST = 0.5;
 const IDLE_PERIOD_SECONDS = 3;
 const IDLE_AMPLITUDE_RAD = THREE.MathUtils.degToRad(0.5);
+const CHARACTER_POSES = Object.freeze(['front', 'back']);
 
 const PROFILES = Object.freeze({
   Zeynep: { asset: 'zeynep', height: CHILD_HEIGHT },
@@ -15,20 +16,24 @@ const PROFILES = Object.freeze({
 
 export function createCharacter(name, pose = 'front', options = {}) {
   const profile = PROFILES[name] || PROFILES.Zeynep;
-  const resolvedPose = pose === 'back' ? 'back' : 'front';
-  const ratio = CHARACTER_RATIOS[profile.asset]?.[resolvedPose];
-  if (!Number.isFinite(ratio) || ratio <= 0) {
-    throw new Error(`Missing character ratio for ${profile.asset}_${resolvedPose}`);
-  }
+  const resolvedPose = CHARACTER_POSES.includes(pose) ? pose : 'front';
+  const ratios = CHARACTER_RATIOS[profile.asset];
+  CHARACTER_POSES.forEach((poseName) => {
+    if (!Number.isFinite(ratios?.[poseName]) || ratios[poseName] <= 0) {
+      throw new Error(`Missing character ratio for ${profile.asset}_${poseName}`);
+    }
+  });
 
   const ownsResources = !options.resources;
   const resources = options.resources || { geometries: [], materials: [], textures: [] };
   const group = new THREE.Group();
-  const textureUrl = new URL(`${profile.asset}_${resolvedPose}.png`, CHARACTER_ASSET_ROOT).href;
-  const { texture, ready } = loadCharacterTexture(textureUrl, resources);
-  const geometry = registerGeometry(new THREE.PlaneGeometry(profile.height * ratio, profile.height), resources);
+  const poseAssets = Object.fromEntries(CHARACTER_POSES.map((poseName) => {
+    const textureUrl = new URL(`${profile.asset}_${poseName}.png`, CHARACTER_ASSET_ROOT).href;
+    return [poseName, loadCharacterTexture(textureUrl, resources)];
+  }));
+  const geometry = registerGeometry(new THREE.PlaneGeometry(profile.height, profile.height), resources);
   const material = registerMaterial(new THREE.MeshStandardMaterial({
-    map: texture,
+    map: poseAssets[resolvedPose].texture,
     alphaTest: ALPHA_TEST,
     transparent: false,
     side: THREE.DoubleSide,
@@ -37,28 +42,47 @@ export function createCharacter(name, pose = 'front', options = {}) {
   }), resources);
   const depthMaterial = registerMaterial(new THREE.MeshDepthMaterial({
     depthPacking: THREE.RGBADepthPacking,
-    map: texture,
+    map: poseAssets[resolvedPose].texture,
     alphaTest: ALPHA_TEST,
     side: THREE.DoubleSide,
   }), resources);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = `${name} ${resolvedPose} billboard`;
   mesh.position.y = profile.height / 2;
+  mesh.scale.x = ratios[resolvedPose];
   mesh.castShadow = true;
   mesh.customDepthMaterial = depthMaterial;
   group.add(mesh);
 
   group.name = name;
-  const textureReady = ready.then((loadedTexture) => loadedTexture);
+  const textureReady = Promise.all(CHARACTER_POSES.map((poseName) => poseAssets[poseName].ready));
   Object.assign(group.userData, {
     characterName: name,
     characterGeometryMode: 'billboard',
     characterPose: resolvedPose,
     characterMesh: mesh,
     textureReady,
+    setPose(nextPose) {
+      const safePose = CHARACTER_POSES.includes(nextPose) ? nextPose : 'front';
+      if (group.userData.characterPose === safePose) return;
+      const nextTexture = poseAssets[safePose].texture;
+      material.map = nextTexture;
+      depthMaterial.map = nextTexture;
+      material.needsUpdate = true;
+      depthMaterial.needsUpdate = true;
+      mesh.scale.x = ratios[safePose];
+      mesh.name = `${name} ${safePose} billboard`;
+      group.userData.characterPose = safePose;
+    },
     updateIdle(elapsedSeconds, phase = 0) {
+      mesh.position.y = profile.height / 2;
       mesh.rotation.z = Math.sin(elapsedSeconds * Math.PI * 2 / IDLE_PERIOD_SECONDS + phase)
         * IDLE_AMPLITUDE_RAD;
+    },
+    updateRun(elapsedSeconds) {
+      const step = Math.sin(elapsedSeconds * 13);
+      mesh.position.y = profile.height / 2 + Math.abs(step) * 0.035;
+      mesh.rotation.z = step * 0.035;
     },
   });
 

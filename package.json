@@ -8,12 +8,17 @@
     "build": "vite build",
     "preview": "vite preview",
     "shot": "node scripts/shot.mjs",
-    "verify": "node scripts/verify-world.mjs && node scripts/verify-progress.mjs && node scripts/verify-project.mjs && vite build"
+    "gen:rules": "node scripts/gen-rules.mjs",
+    "verify:rules": "node scripts/run-rules-test.mjs",
+    "verify:live": "node scripts/verify-live-persistence.mjs",
+    "verify": "node scripts/verify-world.mjs && node scripts/verify-progress.mjs && node scripts/verify-persistence.mjs && node scripts/verify-project.mjs && npm run verify:rules && vite build"
   },
   "dependencies": {
+    "firebase": "^12.18.0",
     "three": "0.179.1"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "playwright": "^1.63.0",
     "vite": "^7.3.6"
   }

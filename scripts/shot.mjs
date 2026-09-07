@@ -16,6 +16,7 @@ const presets = [
   ['puzzle-room', '05-puzzle-room.png'],
   ['solved-bridge', '06-solved-bridge.png'],
   ['region-2', '07-region-2.png'],
+  ['nickname', '08-nickname.png'],
 ];
 
 let serverProcess;
@@ -49,6 +50,7 @@ try {
     const url = new URL(baseUrl);
     url.searchParams.set('debug', '1');
     url.searchParams.set('cam', preset);
+    url.searchParams.set('firebase', 'off');
     await page.goto(url.href, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
       (expectedPreset) => window.__WORLD_READY__ === true
@@ -60,6 +62,7 @@ try {
     );
     await page.waitForFunction(() => getComputedStyle(document.querySelector('#loading')).opacity === '0');
     await assertPresetState(page, preset);
+    await page.getByText('Çevrimdışı', { exact: true }).waitFor({ state: 'visible' });
     await page.screenshot({
       path: `${outputDirectory}/${filename}`,
       type: 'png',
@@ -181,6 +184,11 @@ async function assertPresetState(page, preset) {
   }
   if (preset === 'region-2') {
     await page.waitForFunction(() => document.querySelector('#region-name')?.textContent === 'Khepri Yelkenleri');
+  }
+  if (preset === 'nickname') {
+    await page.locator('#nickname-room.is-open').waitFor({ state: 'visible' });
+    await page.getByRole('button', { name: 'Yeniden üret' }).waitFor({ state: 'visible' });
+    await page.getByRole('button', { name: 'Bu olsun' }).waitFor({ state: 'visible' });
   }
 }
 

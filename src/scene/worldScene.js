@@ -358,6 +358,7 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
 
   function updateCharacter(elapsedSeconds, activeCamera) {
     if (!detailedRegion) return;
+    let moving = Boolean(characterMove);
     let islandId = characterIslandId;
     let characterPosition;
     let shadowPosition;
@@ -383,6 +384,7 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
         characterIslandId = characterMove.toIslandId;
         const resolve = characterMove.resolve;
         characterMove = null;
+        moving = false;
         resolve?.(true);
       }
     } else {
@@ -400,7 +402,9 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
     contactShadow.visible = zeynep.visible;
     contactShadowMaterial.opacity = 0.3 * detailOpacity;
     zeynep.lookAt(activeCamera.position.x, zeynep.position.y, activeCamera.position.z);
-    zeynep.userData.updateIdle(elapsedSeconds, 0.8);
+    zeynep.userData.setPose(moving ? 'back' : 'front');
+    if (moving) zeynep.userData.updateRun(elapsedSeconds);
+    else zeynep.userData.updateIdle(elapsedSeconds, 0.8);
   }
 
   function getCharacterAnchor(islandId) {

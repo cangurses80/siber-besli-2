@@ -1,17 +1,29 @@
-export function createProgress(worldData) {
+export function createProgress(worldData, initialState = {}) {
   const islandById = new Map(worldData.islands.map((island) => [island.id, island]));
   const regionById = new Map(worldData.regions.map((region) => [region.id, region]));
   const islandBridgeById = new Map(worldData.bridges.map((bridge) => [bridge.id, bridge]));
   const regionBridgeById = new Map(worldData.regionBridges.map((bridge) => [bridge.id, bridge]));
   const listeners = new Set();
-  const solvedIslands = new Set();
-  const openBridges = new Set(
+  const initialOpenBridgeIds = new Set(
     [...worldData.bridges, ...worldData.regionBridges]
       .filter((bridge) => bridge.state === 'open')
       .map((bridge) => bridge.id),
   );
-  let activeRegionId = worldData.regions[0].id;
-  let currentIslandId = worldData.regions[0].islands[0];
+  const validBridgeIds = new Set([...islandBridgeById.keys(), ...regionBridgeById.keys()]);
+  const solvedIslands = new Set(
+    iterableValues(initialState.solvedIslands).filter((id) => islandById.has(id)),
+  );
+  const openBridges = new Set(initialOpenBridgeIds);
+  iterableValues(initialState.openBridges)
+    .filter((id) => validBridgeIds.has(id))
+    .forEach((id) => openBridges.add(id));
+  let activeRegionId = regionById.has(initialState.activeRegionId)
+    ? initialState.activeRegionId
+    : worldData.regions[0].id;
+  const requestedIsland = islandById.get(initialState.currentIslandId);
+  let currentIslandId = requestedIsland?.regionId === activeRegionId
+    ? requestedIsland.id
+    : regionById.get(activeRegionId).islands[0];
 
   function getSnapshot() {
     return Object.freeze({
@@ -161,6 +173,22 @@ export function createProgress(worldData) {
     return result;
   }
 
+  function reset() {
+    const alreadyInitial = solvedIslands.size === 0
+      && openBridges.size === initialOpenBridgeIds.size
+      && [...openBridges].every((id) => initialOpenBridgeIds.has(id))
+      && activeRegionId === worldData.regions[0].id
+      && currentIslandId === worldData.regions[0].islands[0];
+    if (alreadyInitial) return false;
+    solvedIslands.clear();
+    openBridges.clear();
+    initialOpenBridgeIds.forEach((id) => openBridges.add(id));
+    activeRegionId = worldData.regions[0].id;
+    currentIslandId = worldData.regions[0].islands[0];
+    emit('progress-reset');
+    return true;
+  }
+
   function subscribe(listener) {
     if (typeof listener !== 'function') throw new TypeError('listener bir fonksiyon olmalı');
     listeners.add(listener);
@@ -179,8 +207,14 @@ export function createProgress(worldData) {
     solveRegion,
     setBridgeState,
     setActiveRegion,
+    reset,
     subscribe,
   });
+}
+
+function iterableValues(value) {
+  if (value instanceof Set || Array.isArray(value)) return [...value];
+  return [];
 }
 
 function walkGraph(startId, edges, openEdgeIds, acceptsNode) {

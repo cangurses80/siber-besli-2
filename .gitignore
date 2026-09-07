@@ -3,4 +3,6 @@ dist/
 .netlify/
 .DS_Store
 *.log
+.env.local
+.env.*.local
 /qa/*.png
