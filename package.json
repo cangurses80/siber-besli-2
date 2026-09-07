@@ -11,7 +11,7 @@
     "gen:rules": "node scripts/gen-rules.mjs",
     "verify:rules": "node scripts/run-rules-test.mjs",
     "verify:live": "node scripts/verify-live-persistence.mjs",
-    "verify": "node scripts/verify-world.mjs && node scripts/verify-progress.mjs && node scripts/verify-persistence.mjs && node scripts/verify-project.mjs && npm run verify:rules && vite build && node scripts/verify-chunks.mjs"
+    "verify": "node scripts/verify-world.mjs && node scripts/verify-progress.mjs && node scripts/verify-persistence.mjs && node scripts/verify-dialogue.mjs && node scripts/verify-project.mjs && npm run verify:rules && vite build && node scripts/verify-chunks.mjs"
   },
   "dependencies": {
     "firebase": "^12.18.0",

@@ -30,6 +30,14 @@ const ISLAND_BRIDGE_RADIUS = 0.23;
 const BRIDGE_SURFACE_CLEARANCE = 0.25;
 const BRIDGE_EDGE_CLEARANCE = 1.05;
 const BRIDGE_CONTROL_OFFSET = 4;
+const MIMAR_HEIGHT_RATIO = 0.5;
+const MIMAR_HOVER_HEIGHT = 10;
+const MIMAR_CHARACTER_OFFSET_RATIO = 0.4;
+const MIMAR_LOCAL_OFFSET_DIRECTION = new THREE.Vector2(-0.75, 0.66).normalize();
+const MIMAR_IDLE_ROTATION_SPEED = 0.3;
+const MIMAR_SPEAKING_ROTATION_MULTIPLIER = 1.8;
+const MIMAR_MOVE_DURATION = 0.6;
+const MIMAR_GLITCH_DURATION = 0.12;
 
 export function createWorldScene({ renderer, textures, data, debugMode = false }) {
   const scene = new THREE.Scene();
@@ -50,6 +58,15 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
   let characterIslandId = selectedIslandId;
   let characterMove = null;
   let ghostEntries = [];
+  let mimarIslandId = selectedIslandId;
+  let mimarMove = null;
+  let mimarSpeaking = false;
+  let mimarRotation = 0;
+  let mimarLastElapsed = 0;
+  let mimarGlitchCycle = 0;
+  let mimarGlitchStartedAt = null;
+  let mimarNextGlitchAt = 8 + hashUnit('mimar-glitch-0') * 7;
+  let mimarForcedGlitch = false;
 
   createSky(scene, globalResources);
   createMist(scene, globalResources);
@@ -97,6 +114,23 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
   });
 
   const zeynep = createCharacter('Zeynep', 'front', { resources: globalResources });
+  const mimarSourceGeometry = new THREE.OctahedronGeometry(1, 0);
+  const mimarGeometry = new THREE.EdgesGeometry(mimarSourceGeometry);
+  mimarSourceGeometry.dispose();
+  const mimarBasePositions = mimarGeometry.getAttribute('position').array.slice();
+  const mimarMaterial = new THREE.LineBasicMaterial({
+    color: new THREE.Color().setRGB(0.456, 1.44, 1.74),
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const mimar = new THREE.LineSegments(mimarGeometry, mimarMaterial);
+  mimar.name = 'Mimar wireframe octahedron';
+  mimar.renderOrder = 5;
+  globalResources.geometries.push(mimarGeometry);
+  globalResources.materials.push(mimarMaterial);
+  scene.add(mimar);
   const ghostGroup = new THREE.Group();
   ghostGroup.name = 'Recent reader ghost silhouettes';
   const ghostTextureReady = new Promise((resolve, reject) => {
@@ -379,6 +413,7 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
       visual.updateAnimation(elapsedSeconds);
     });
     updateCharacter(elapsedSeconds, activeCamera);
+    updateMimar(elapsedSeconds);
     updateGhostPlayers();
   }
 
@@ -515,6 +550,7 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
   function moveCharacterTo(islandId, startedAt, duration = 0.8) {
     const destination = getCharacterAnchor(islandId);
     if (!destination) return Promise.resolve(false);
+    moveMimarTo(islandId, startedAt, duration <= 0 ? 0 : MIMAR_MOVE_DURATION);
     if (characterMove) characterMove.resolve?.(false);
     if (duration <= 0) {
       characterIslandId = islandId;
@@ -536,6 +572,156 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
         resolve,
       };
     });
+  }
+
+  function getMimarAnchor(islandId) {
+    const animation = detailedRegion?.islandAnimationById.get(islandId);
+    if (!animation) return null;
+    const island = animation.island;
+    const characterAnchor = getCharacterAnchor(islandId);
+    const offset = MIMAR_LOCAL_OFFSET_DIRECTION.clone()
+      .rotateAround(new THREE.Vector2(), animation.rotation)
+      .multiplyScalar(island.radius * MIMAR_CHARACTER_OFFSET_RATIO);
+    return {
+      position: new THREE.Vector3(
+        characterAnchor.character.x + offset.x,
+        getIslandTopY(animation) + MIMAR_HOVER_HEIGHT,
+        characterAnchor.character.z + offset.y,
+      ),
+      scale: island.radius * MIMAR_HEIGHT_RATIO * 0.5,
+    };
+  }
+
+  function getMimarMetrics() {
+    const animation = detailedRegion?.islandAnimationById.get(mimarIslandId);
+    const characterAnchor = getCharacterAnchor(mimarIslandId);
+    if (!animation || !characterAnchor) return null;
+    const islandTopY = getIslandTopY(animation);
+    return {
+      islandRadius: animation.island.radius,
+      islandTopY,
+      centerHeight: mimar.position.y - islandTopY,
+      horizontalCharacterOffset: Math.hypot(
+        mimar.position.x - characterAnchor.character.x,
+        mimar.position.z - characterAnchor.character.z,
+      ),
+      visibleHeight: mimar.scale.y * 2,
+    };
+  }
+
+  function moveMimarTo(islandId, startedAt, duration = MIMAR_MOVE_DURATION) {
+    const destination = getMimarAnchor(islandId);
+    if (!destination) return false;
+    if (duration <= 0) {
+      mimarIslandId = islandId;
+      mimarMove = null;
+      mimar.position.copy(destination.position);
+      mimar.scale.setScalar(destination.scale);
+      return true;
+    }
+    mimarMove = {
+      fromIslandId: mimarIslandId,
+      toIslandId: islandId,
+      startedAt,
+      duration,
+      fromPosition: mimar.position.clone(),
+      fromScale: mimar.scale.x,
+    };
+    return true;
+  }
+
+  function updateMimar(elapsedSeconds) {
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let anchor;
+    if (mimarMove) {
+      const raw = THREE.MathUtils.clamp(
+        (elapsedSeconds - mimarMove.startedAt) / mimarMove.duration,
+        0,
+        1,
+      );
+      const amount = easeInOutCubic(raw);
+      const source = getMimarAnchor(mimarMove.fromIslandId);
+      const destination = getMimarAnchor(mimarMove.toIslandId);
+      if (destination) {
+        const sourcePosition = source?.position || mimarMove.fromPosition;
+        const sourceScale = source?.scale || mimarMove.fromScale;
+        anchor = {
+          position: sourcePosition.clone().lerp(destination.position, amount),
+          scale: THREE.MathUtils.lerp(sourceScale, destination.scale, amount),
+        };
+        anchor.position.y += Math.sin(amount * Math.PI) * 2.4;
+      }
+      if (raw >= 1) {
+        mimarIslandId = mimarMove.toIslandId;
+        mimarMove = null;
+      }
+    }
+    anchor ||= getMimarAnchor(mimarIslandId);
+    if (!anchor) return;
+
+    const delta = Math.max(0, Math.min(0.05, elapsedSeconds - mimarLastElapsed));
+    mimarLastElapsed = elapsedSeconds;
+    const motionScale = reducedMotion ? 0.15 : 1;
+    const rotationSpeed = MIMAR_IDLE_ROTATION_SPEED
+      * (mimarSpeaking ? MIMAR_SPEAKING_ROTATION_MULTIPLIER : 1)
+      * motionScale;
+    mimarRotation += delta * rotationSpeed;
+    const breath = reducedMotion ? 1 : 1 + Math.sin(elapsedSeconds * 1.35) * 0.04;
+    mimar.position.copy(anchor.position);
+    mimar.rotation.y = mimarRotation;
+    mimar.scale.setScalar(anchor.scale * breath);
+    mimar.visible = detailOpacity > 0.35;
+    mimar.material.opacity = (mimarSpeaking ? 1 : 0.72) * Math.min(1, detailOpacity / 0.65);
+    mimar.material.color.setRGB(
+      ...(mimarSpeaking ? [1.62, 3.84, 4.44] : [0.456, 1.44, 1.74]),
+    );
+    updateMimarGlitch(elapsedSeconds, reducedMotion);
+  }
+
+  function updateMimarGlitch(elapsedSeconds, reducedMotion) {
+    restoreMimarGeometry();
+    if (reducedMotion && !mimarForcedGlitch) return;
+    if (!mimarForcedGlitch && mimarGlitchStartedAt === null && elapsedSeconds >= mimarNextGlitchAt) {
+      mimarGlitchStartedAt = elapsedSeconds;
+      mimarGlitchCycle += 1;
+    }
+    const glitchAge = mimarForcedGlitch ? 0.054 : elapsedSeconds - (mimarGlitchStartedAt ?? elapsedSeconds);
+    const glitchActive = mimarForcedGlitch
+      || (mimarGlitchStartedAt !== null && glitchAge < MIMAR_GLITCH_DURATION);
+    if (!glitchActive) {
+      if (mimarGlitchStartedAt !== null) {
+        mimarGlitchStartedAt = null;
+        mimarNextGlitchAt = elapsedSeconds + 8 + hashUnit(`mimar-glitch-${mimarGlitchCycle}`) * 7;
+      }
+      return;
+    }
+    const position = mimarGeometry.getAttribute('position');
+    const phase = mimarForcedGlitch ? 2 : Math.min(2, Math.floor(glitchAge / 0.04));
+    for (let index = 0; index < position.count; index += 1) {
+      const offset = (hashUnit(`mimar-${mimarGlitchCycle}-${phase}-${index}`) - 0.5) * 0.22;
+      position.setXYZ(
+        index,
+        mimarBasePositions[index * 3] + offset,
+        mimarBasePositions[index * 3 + 1] + offset * 0.55,
+        mimarBasePositions[index * 3 + 2] - offset * 0.7,
+      );
+    }
+    position.needsUpdate = true;
+  }
+
+  function restoreMimarGeometry() {
+    const position = mimarGeometry.getAttribute('position');
+    position.array.set(mimarBasePositions);
+    position.needsUpdate = true;
+  }
+
+  function setMimarSpeaking(speaking) {
+    mimarSpeaking = Boolean(speaking);
+  }
+
+  function setMimarGlitch(forced) {
+    mimarForcedGlitch = Boolean(forced);
+    if (!mimarForcedGlitch) restoreMimarGeometry();
   }
 
   function setMapBlend(regionAmount, worldAmount) {
@@ -646,6 +832,8 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
     createDetailedRegion,
     disposeDetailedRegion,
     moveCharacterTo,
+    setMimarSpeaking,
+    setMimarGlitch,
     setGhostPlayers,
     getGhostPositions,
     syncProgress,
@@ -665,6 +853,11 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
     get geometryDiagnostics() { return detailedRegion.geometryDiagnostics; },
     get selectedIslandId() { return selectedIslandId; },
     get characterIslandId() { return characterIslandId; },
+    get mimarIslandId() { return mimarIslandId; },
+    get mimar() { return mimar; },
+    get mimarMetrics() { return getMimarMetrics(); },
+    get mimarSpeaking() { return mimarSpeaking; },
+    get mimarForcedGlitch() { return mimarForcedGlitch; },
     dispose() {
       disposeDetailedRegion();
       regionBridgeVisuals.forEach((visual) => visual.dispose());

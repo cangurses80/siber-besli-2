@@ -14,6 +14,7 @@ import {
 } from '../src/playerStore.js';
 
 const world = JSON.parse(await readFile(new URL('../src/world.json', import.meta.url), 'utf8'));
+const validMimarFlags = new Set(['mimar.welcome_seen', 'mimar.transparency_seen']);
 const savedTimestamp = Object.freeze({ seconds: 42, nanoseconds: 0 });
 const hydrated = hydratePlayerDocument(world, {
   nickname: 'Cesur Baykuş',
@@ -25,7 +26,8 @@ const hydrated = hydratePlayerDocument(world, {
   },
   openBridges: ['helios-bridge-01', 'helios-bridge-01', 'bilinmeyen-kopru'],
   openRegionBridges: ['region-bridge-01', 'bilinmeyen-bolge-koprusu'],
-});
+  mimarFlags: ['mimar.welcome_seen', 'mimar.welcome_seen', 'mimar.unknown'],
+}, { validMimarFlags });
 
 assert.equal(hydrated.nickname, 'Cesur Baykuş');
 assert.equal(hydrated.progressState.activeRegionId, 'khepri');
@@ -36,13 +38,20 @@ assert.ok(hydrated.progressState.openBridges.has('helios-bridge-01'));
 assert.ok(hydrated.progressState.openBridges.has('helios-bridge-02'), 'Dünya başlangıç köprüsü korunmalı');
 assert.ok(hydrated.progressState.openBridges.has('region-bridge-01'));
 assert.equal(hydrated.progressState.openBridges.has('bilinmeyen-kopru'), false);
+assert.deepEqual(hydrated.mimarFlags, ['mimar.welcome_seen']);
 
-const serialized = serializePlayerState(world, hydrated.progressState, hydrated.puzzleRecords);
+const serialized = serializePlayerState(
+  world,
+  hydrated.progressState,
+  hydrated.puzzleRecords,
+  hydrated.mimarFlags,
+);
 assert.deepEqual(serialized.openBridges.sort(), ['helios-bridge-01', 'helios-bridge-02']);
 assert.deepEqual(serialized.openRegionBridges, ['region-bridge-01']);
 assert.deepEqual(Object.keys(serialized.solved), ['helios-01']);
 assert.equal(serialized.solvedCount, 1);
 assert.equal(serialized.schemaVersion, PLAYER_SCHEMA_VERSION);
+assert.deepEqual(serialized.mimarFlags, ['mimar.welcome_seen']);
 
 let records = recordPuzzleAttempt({}, 'helios-03');
 assert.equal(records['helios-03'].attempts, 1, 'Odaya giriş attempts değerini artırmalı');
@@ -68,6 +77,10 @@ assert.equal(newDocument.lastSeenAt, SERVER_TIMESTAMP_MARKER);
 assert.equal(newDocument.schemaVersion, 1);
 assert.deepEqual(newDocument.solved, {});
 assert.equal(newDocument.solvedCount, 0);
+assert.deepEqual(newDocument.mimarFlags, []);
+
+const legacyPlayer = hydratePlayerDocument(world, { nickname: 'Eski Gezgin' }, { validMimarFlags });
+assert.deepEqual(legacyPlayer.mimarFlags, [], 'Eski oyuncu belgesi boş Mimar flag listesiyle hydrate edilmeli');
 
 const reset = resetPlayerProgress(world);
 assert.equal(reset.progressState.solvedIslands.size, 0);

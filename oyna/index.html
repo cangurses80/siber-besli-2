@@ -63,11 +63,31 @@
         <button id="card-action" class="card-action" type="button" hidden>Gir</button>
       </section>
 
+      <section id="mimar-dialogue" class="mimar-dialogue" role="dialog" aria-modal="false" aria-labelledby="mimar-dialogue-text" aria-hidden="true" tabindex="0" hidden>
+        <div class="mimar-dialogue__icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" focusable="false">
+            <path d="M24 3 43 24 24 45 5 24 24 3Zm0 0v42M5 24h38M24 3 5 24l19 7 19-7L24 3" />
+          </svg>
+        </div>
+        <div class="mimar-dialogue__copy">
+          <span>MİMAR</span>
+          <p id="mimar-dialogue-text" aria-live="polite"></p>
+        </div>
+        <button id="mimar-skip" class="mimar-dialogue__skip" type="button">Geç</button>
+      </section>
+
       <aside id="debug-controls" class="debug-controls" hidden aria-label="Debug kontrolleri">
         <pre id="debug-identity" class="debug-identity"></pre>
         <button id="debug-solve-island" type="button">Seçili adayı çöz</button>
         <button id="debug-solve-region" type="button">Bölgeyi tamamen çöz</button>
         <button id="debug-reset-progress" type="button">İlerlemeyi sıfırla</button>
+        <label class="debug-dialogue-picker">
+          Mimar diyaloğu
+          <select id="debug-dialogue-select"></select>
+        </label>
+        <button id="debug-trigger-dialogue" type="button">Tetikle</button>
+        <pre id="debug-mimar-flags" class="debug-identity"></pre>
+        <button id="debug-reset-mimar-flags" type="button">Mimar flag’lerini sıfırla</button>
       </aside>
 
       <div id="transition-shade" class="transition-shade"></div>

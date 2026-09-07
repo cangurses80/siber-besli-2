@@ -20,6 +20,9 @@ const presets = [
   ['world-counter', '09-world-counter.png'],
   ['island-stats', '10-island-stats.png'],
   ['ghost-region', '11-ghost-region.png'],
+  ['mimar-idle', '12-mimar-idle.png'],
+  ['mimar-transparency', '13-mimar-transparency.png'],
+  ['mimar-glitch', '14-mimar-glitch.png'],
 ];
 
 let serverProcess;
@@ -79,6 +82,7 @@ try {
       await runPuzzlePauseSmoke(page);
       await runNoteSmoke(page);
     }
+    if (preset === 'mimar-transparency') await runMimarDialogueSmoke(page);
     console.log(`qa/${filename} ← ${url.href}`);
   }
 
@@ -209,6 +213,43 @@ async function assertPresetState(page, preset) {
         && labels.filter((label) => getComputedStyle(label).display !== 'none').length === 4;
     });
   }
+  if (preset === 'mimar-idle') {
+    await page.waitForFunction(() => window.__WORLD_DIAGNOSTICS__?.mimar?.visible === true);
+    await assertMimarPlacement(page);
+  }
+  if (preset === 'mimar-transparency') {
+    await page.locator('#mimar-dialogue.is-open').waitFor({ state: 'visible' });
+    await page.getByText('[PH] Sana neyi sakladığımızı açıkça anlatayım.', { exact: true })
+      .waitFor({ state: 'visible' });
+    if (await page.locator('#mimar-skip').isVisible()) {
+      throw new Error('Şeffaflık diyaloğunda Geç butonu görünmemeli');
+    }
+    await assertMimarPlacement(page);
+    await page.locator('#island-card.is-mimar-compact').waitFor({ state: 'visible' });
+    if (await page.locator('#island-card.is-mimar-compact #card-action').isVisible()) {
+      throw new Error('Mimar konuşurken ada eylem butonu görünmemeli');
+    }
+  }
+  if (preset === 'mimar-glitch') {
+    await page.waitForFunction(() => window.__WORLD_DIAGNOSTICS__?.mimar?.forcedGlitch === true);
+    await assertMimarPlacement(page);
+  }
+}
+
+async function assertMimarPlacement(page) {
+  const metrics = await page.evaluate(() => window.__WORLD_DIAGNOSTICS__?.mimar);
+  if (!metrics) throw new Error('Mimar yerleşim tanıları bulunamadı');
+  const heightRatio = metrics.visibleHeight / metrics.islandRadius;
+  const offsetRatio = metrics.horizontalCharacterOffset / metrics.islandRadius;
+  if (Math.abs(heightRatio - 0.5) > 0.025) {
+    throw new Error(`Mimar yükseklik oranı 0.50 değil: ${heightRatio}`);
+  }
+  if (Math.abs(metrics.centerHeight - 10) > 0.05) {
+    throw new Error(`Mimar yüzey yüksekliği 10 değil: ${metrics.centerHeight}`);
+  }
+  if (Math.abs(offsetRatio - 0.4) > 0.01) {
+    throw new Error(`Mimar/Zeynep yatay ofset oranı 0.40 değil: ${offsetRatio}`);
+  }
 }
 
 async function runPuzzlePauseSmoke(page) {
@@ -253,4 +294,22 @@ async function runNoteSmoke(page) {
   if (!fitsViewport) throw new Error('Not ekranı 390×844 viewport içine kaydırmasız sığmıyor');
   await page.getByRole('button', { name: 'Not bırakmadan geç' }).click();
   await page.waitForFunction(() => document.querySelector('#note-room').hidden === true);
+}
+
+async function runMimarDialogueSmoke(page) {
+  const expectedLines = [
+    '[PH] Takma adını, çözdüğün adaları ve çözüm sürelerini saklarız.',
+    '[PH] Seçip bıraktığın kalıp notları da sayaçlar ve liderlik için kullanırız.',
+    '[PH] E-posta, gerçek isim veya yaş istemeyiz.',
+    '[PH] Bunların dışında hiçbir şey toplamayız.',
+  ];
+  const dialogue = page.locator('#mimar-dialogue');
+  for (const line of expectedLines) {
+    await dialogue.click();
+    await dialogue.click();
+    await page.getByText(line, { exact: true }).waitFor({ state: 'visible' });
+  }
+  await dialogue.click();
+  await dialogue.waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => !document.querySelector('#island-card').classList.contains('is-mimar-compact'));
 }

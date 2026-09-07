@@ -122,13 +122,27 @@ service cloud.firestore {
         ]);
     }
 
+    function validMimarFlags(value) {
+      return value is list
+        && value.size() <= 64
+        && value.size() == value.toSet().size()
+        && value.hasOnly([
+          'mimar.welcome_seen', 'mimar.transparency_seen', 'mimar.first_island_reachable', 'mimar.first_puzzle_enter', 'mimar.first_puzzle_solved',
+          'mimar.first_bridge_opened', 'mimar.first_region_bridge_opened', 'mimar.milestone_30', 'mimar.milestone_15', 'mimar.milestone_5',
+          'mimar.region_helios', 'mimar.region_khepri', 'mimar.region_uruk', 'mimar.region_quetzal', 'mimar.region_parsa',
+          'mimar.region_veda', 'mimar.first_note_left', 'mimar.first_world_map', 'mimar.first_leaderboard'
+        ]);
+    }
+
     function validPlayer(data) {
       return data.keys().hasAll([
           'nickname', 'createdAt', 'lastSeenAt', 'activeRegionId', 'currentIslandId',
-          'solvedCount', 'solved', 'openBridges', 'openRegionBridges', 'schemaVersion'
+          'solvedCount', 'solved', 'openBridges', 'openRegionBridges', 'mimarFlags',
+          'schemaVersion'
         ]) && data.keys().hasOnly([
           'nickname', 'createdAt', 'lastSeenAt', 'activeRegionId', 'currentIslandId',
-          'solvedCount', 'solved', 'openBridges', 'openRegionBridges', 'schemaVersion'
+          'solvedCount', 'solved', 'openBridges', 'openRegionBridges', 'mimarFlags',
+          'schemaVersion'
         ])
         && data.schemaVersion == 1
         && validNickname(data.nickname)
@@ -140,7 +154,8 @@ service cloud.firestore {
         && validRegionAndIsland(data)
         && validSolvedShape(data.solved)
         && validOpenBridges(data.openBridges)
-        && validOpenRegionBridges(data.openRegionBridges);
+        && validOpenRegionBridges(data.openRegionBridges)
+        && validMimarFlags(data.mimarFlags);
     }
 
     function validPlayerSolvedCountUpdate(after, before) {

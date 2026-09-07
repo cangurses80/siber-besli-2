@@ -1,0 +1,195 @@
+[
+  {
+    "id": "welcome",
+    "trigger": "first_launch",
+    "when": { "flagsNone": ["mimar.welcome_seen"] },
+    "lines": [
+      "[PH] Hoş geldin, {nickname}.",
+      "[PH] Ben Mimar. Adalar arasındaki görünmez yolları dinlerim.",
+      "[PH] Sen ilerledikçe bu dünya da biçim değiştirecek."
+    ],
+    "setFlags": ["mimar.welcome_seen"],
+    "once": true,
+    "priority": 100
+  },
+  {
+    "id": "transparency",
+    "trigger": "first_launch",
+    "when": {
+      "flagsAll": ["mimar.welcome_seen"],
+      "flagsNone": ["mimar.transparency_seen"]
+    },
+    "lines": [
+      "[PH] Sana neyi sakladığımızı açıkça anlatayım.",
+      "[PH] Takma adını, çözdüğün adaları ve çözüm sürelerini saklarız.",
+      "[PH] Seçip bıraktığın kalıp notları da sayaçlar ve liderlik için kullanırız.",
+      "[PH] E-posta, gerçek isim veya yaş istemeyiz.",
+      "[PH] Bunların dışında hiçbir şey toplamayız."
+    ],
+    "setFlags": ["mimar.transparency_seen"],
+    "once": true,
+    "priority": 90
+  },
+  {
+    "id": "first-island-reachable",
+    "trigger": "island_reachable",
+    "when": { "flagsNone": ["mimar.first_island_reachable"] },
+    "lines": ["[PH] {islandName} artık sana cevap veriyor. Yeni yolu izleyebilirsin."],
+    "setFlags": ["mimar.first_island_reachable"],
+    "once": true,
+    "priority": 45
+  },
+  {
+    "id": "first-puzzle-enter",
+    "trigger": "puzzle_enter",
+    "when": { "flagsNone": ["mimar.first_puzzle_enter"] },
+    "lines": ["[PH] Bu odanın kuralını acele etmeden dinle. Hazır olduğunda içeri gir."],
+    "setFlags": ["mimar.first_puzzle_enter"],
+    "once": true,
+    "priority": 50
+  },
+  {
+    "id": "first-puzzle-solved",
+    "trigger": "puzzle_solved",
+    "when": { "flagsNone": ["mimar.first_puzzle_solved"] },
+    "lines": ["[PH] İlk düğüm uyandı. Çözümün adanın içinde ışık gibi dolaşıyor."],
+    "setFlags": ["mimar.first_puzzle_solved"],
+    "once": true,
+    "priority": 60
+  },
+  {
+    "id": "first-bridge-opened",
+    "trigger": "bridge_opened",
+    "when": { "flagsNone": ["mimar.first_bridge_opened"] },
+    "lines": ["[PH] Sana bir köprü açtım. Karşı kıyı artık ulaşabileceğin kadar yakın."],
+    "setFlags": ["mimar.first_bridge_opened"],
+    "once": true,
+    "priority": 60
+  },
+  {
+    "id": "first-region-bridge-opened",
+    "trigger": "region_bridge_opened",
+    "when": { "flagsNone": ["mimar.first_region_bridge_opened"] },
+    "lines": ["[PH] Uzak bir bölgeye uzanan büyük köprü uyandı. Gökyüzü biraz daha genişledi."],
+    "setFlags": ["mimar.first_region_bridge_opened"],
+    "once": true,
+    "priority": 75
+  },
+  {
+    "id": "milestone-30",
+    "trigger": "puzzle_solved",
+    "when": { "solvedMin": 30, "flagsNone": ["mimar.milestone_30"] },
+    "lines": ["[PH] Otuz ada ışık taşıyor. Dünya artık ilk gördüğümüz yer değil."],
+    "setFlags": ["mimar.milestone_30"],
+    "once": true,
+    "priority": 83
+  },
+  {
+    "id": "milestone-15",
+    "trigger": "puzzle_solved",
+    "when": { "solvedMin": 15, "flagsNone": ["mimar.milestone_15"] },
+    "lines": ["[PH] On beş ada tamamlandı. Açtığın yollar artık bir desen oluşturuyor."],
+    "setFlags": ["mimar.milestone_15"],
+    "once": true,
+    "priority": 82
+  },
+  {
+    "id": "milestone-5",
+    "trigger": "puzzle_solved",
+    "when": { "solvedMin": 5, "flagsNone": ["mimar.milestone_5"] },
+    "lines": ["[PH] Beş ada çözüldü. İlk büyük izin gökyüzünde belirdi."],
+    "setFlags": ["mimar.milestone_5"],
+    "once": true,
+    "priority": 81
+  },
+  {
+    "id": "helios-entered",
+    "trigger": "region_entered",
+    "when": { "regionId": "helios", "flagsNone": ["mimar.region_helios"] },
+    "lines": ["[PH] {regionName} taşları güneşi saklar; zeytin yeşili yolları birbirine bağlar."],
+    "setFlags": ["mimar.region_helios"],
+    "once": true,
+    "priority": 55
+  },
+  {
+    "id": "khepri-entered",
+    "trigger": "region_entered",
+    "when": { "regionId": "khepri", "flagsNone": ["mimar.region_khepri"] },
+    "lines": ["[PH] {regionName} kum, papirüs ve lapis mavisinin izlerini taşıyor."],
+    "setFlags": ["mimar.region_khepri"],
+    "once": true,
+    "priority": 55
+  },
+  {
+    "id": "uruk-entered",
+    "trigger": "region_entered",
+    "when": { "regionId": "uruk", "flagsNone": ["mimar.region_uruk"] },
+    "lines": ["[PH] {regionName} basamaklarında kil tabletlerin eski düzeni hâlâ duyuluyor."],
+    "setFlags": ["mimar.region_uruk"],
+    "once": true,
+    "priority": 55
+  },
+  {
+    "id": "quetzal-entered",
+    "trigger": "region_entered",
+    "when": { "regionId": "quetzal", "flagsNone": ["mimar.region_quetzal"] },
+    "lines": ["[PH] {regionName} yeşim taşları ve göğe uzanan Maya şekilleriyle örülü."],
+    "setFlags": ["mimar.region_quetzal"],
+    "once": true,
+    "priority": 55
+  },
+  {
+    "id": "parsa-entered",
+    "trigger": "region_entered",
+    "when": { "regionId": "parsa", "flagsNone": ["mimar.region_parsa"] },
+    "lines": ["[PH] {regionName} turkuaz çinileriyle rüzgârın yönünü görünür kılıyor."],
+    "setFlags": ["mimar.region_parsa"],
+    "once": true,
+    "priority": 55
+  },
+  {
+    "id": "veda-entered",
+    "trigger": "region_entered",
+    "when": { "regionId": "veda", "flagsNone": ["mimar.region_veda"] },
+    "lines": ["[PH] {regionName} nilüfer, indigo ve eski Hint desenleri arasında yüzüyor."],
+    "setFlags": ["mimar.region_veda"],
+    "once": true,
+    "priority": 55
+  },
+  {
+    "id": "first-note-left",
+    "trigger": "note_left",
+    "when": { "flagsNone": ["mimar.first_note_left"] },
+    "lines": ["[PH] Notun adada kaldı. Senden sonra gelen gezgin onu görebilecek."],
+    "setFlags": ["mimar.first_note_left"],
+    "once": true,
+    "priority": 50
+  },
+  {
+    "id": "idle-hint",
+    "trigger": "idle_60s",
+    "when": {},
+    "lines": ["[PH] Yol sessizleştiğinde çevrene bak. Bazen sıradaki adım köprünün ucunda saklanır."],
+    "setFlags": [],
+    "once": false,
+    "priority": 10
+  },
+  {
+    "id": "first-world-map",
+    "trigger": "world_map_opened",
+    "when": { "flagsNone": ["mimar.first_world_map"] },
+    "lines": ["[PH] Dünya haritası bütün bölge yollarını aynı anda gösterir."],
+    "setFlags": ["mimar.first_world_map"],
+    "once": true,
+    "priority": 40
+  },
+  {
+    "id": "first-leaderboard",
+    "trigger": "leaderboard_opened",
+    "when": { "flagsNone": ["mimar.first_leaderboard"] },
+    "lines": ["[PH] Burada yalnız takma adlar ve açılan ada sayıları görünür."],
+    "setFlags": ["mimar.first_leaderboard"],
+    "once": true,
+    "priority": 40
+  }
+]

@@ -36,6 +36,9 @@ const [
   firestoreIndexes,
   viteConfig,
   chunkVerifier,
+  dialogueSource,
+  mimarJsonText,
+  verifyDialogueSource,
 ] = await Promise.all([
   readFile(new URL('../package.json', import.meta.url), 'utf8'),
   readFile(new URL('../index.html', import.meta.url), 'utf8'),
@@ -65,6 +68,9 @@ const [
   readFile(new URL('../firestore.indexes.json', import.meta.url), 'utf8'),
   readFile(new URL('../vite.config.js', import.meta.url), 'utf8'),
   readFile(new URL('./verify-chunks.mjs', import.meta.url), 'utf8'),
+  readFile(new URL('../src/dialogue/index.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/dialogue/mimar.json', import.meta.url), 'utf8'),
+  readFile(new URL('./verify-dialogue.mjs', import.meta.url), 'utf8'),
 ]);
 
 const packageJson = JSON.parse(packageText);
@@ -76,6 +82,7 @@ assert.equal(packageJson.scripts['gen:rules'], 'node scripts/gen-rules.mjs', 'Ru
 assert.equal(packageJson.scripts['verify:live'], 'node scripts/verify-live-persistence.mjs', 'Canlı reload testi kayıtlı olmalı');
 assert.match(packageJson.scripts.verify, /verify-progress\.mjs/, 'Progress doğrulaması verify zincirinde olmalı');
 assert.match(packageJson.scripts.verify, /verify-persistence\.mjs/, 'Persistence doğrulaması verify zincirinde olmalı');
+assert.match(packageJson.scripts.verify, /verify-dialogue\.mjs/, 'Mimar diyalog doğrulaması verify zincirinde olmalı');
 assert.match(packageJson.scripts.verify, /verify:rules/, 'Rules emulator doğrulaması verify zincirinde olmalı');
 assert.match(packageJson.scripts.verify, /verify-chunks\.mjs/, 'Chunk bütçesi verify zincirinde olmalı');
 assert.match(rootHtml, /name="robots" content="noindex, nofollow"/, 'Root noindex meta içermeli');
@@ -123,6 +130,9 @@ assert.match(gameHtml, /id="note-room"/, 'Çözüm sonrası not katmanı bulunma
 assert.match(gameHtml, /id="note-more"[^>]*>Başkalarını göster</, 'Not katmanı yeni altılıyı gösterebilmeli');
 assert.match(gameHtml, /id="note-skip"[^>]*>Not bırakmadan geç</, 'Notu atlama eylemi en altta açıkça bulunmalı');
 assert.match(gameHtml, /id="ghost-labels"/, 'Hayalet takma ad etiket katmanı bulunmalı');
+assert.match(gameHtml, /id="mimar-dialogue"/, 'Mimar diyalog kutusu bulunmalı');
+assert.match(gameHtml, /id="debug-dialogue-select"/, 'Debug Mimar tetikleyicisi bulunmalı');
+assert.match(gameHtml, /id="debug-reset-mimar-flags"/, 'Debug Mimar flag sıfırlama bulunmalı');
 
 assert.match(main, /duration: 0\.8/, 'Kamera geçişi 800 ms olmalı');
 assert.match(main, /OrbitControls/, 'Gezinti modunda OrbitControls kullanılmalı');
@@ -155,18 +165,30 @@ assert.match(worldScene, /createCharacter\('Zeynep'/, 'Zeynep createCharacter il
 assert.match(worldScene, /setPose\(moving \? 'back' : 'front'\)/, 'Zeynep hareket sırasında poz değiştirmeli');
 assert.match(worldScene, /new THREE\.Sprite\(ghostMaterial\)/, 'Hayaletler paylaşılan sprite materyali kullanmalı');
 assert.match(worldScene, /slice\(0, 12\)/, 'Hayalet sayısı 12 ile sınırlanmalı');
+assert.match(worldScene, /new THREE\.OctahedronGeometry\(1, 0\)/, 'Mimar oktahedron kullanmalı');
+assert.match(worldScene, /new THREE\.EdgesGeometry\(mimarSourceGeometry\)/, 'Mimar tel-kafes edge geometrisi kullanmalı');
+assert.match(worldScene, /new THREE\.LineSegments\(mimarGeometry, mimarMaterial\)/, 'Mimar LineSegments ile çizilmeli');
+assert.match(worldScene, /const MIMAR_HEIGHT_RATIO = 0\.5/, 'Mimar yüksekliği ada yarıçapının yüzde 50’si olmalı');
+assert.match(worldScene, /const MIMAR_HOVER_HEIGHT = 10/, 'Mimar merkezi ada yüzeyinden 10 birim yukarıda olmalı');
+assert.match(worldScene, /const MIMAR_CHARACTER_OFFSET_RATIO = 0\.4/, 'Mimar Zeynep’ten yarıçapın yüzde 40’ı kadar ayrılmalı');
+assert.match(worldScene, /const MIMAR_MOVE_DURATION = 0\.6/, 'Mimar hareketi 600 ms olmalı');
+assert.match(worldScene, /MIMAR_GLITCH_DURATION = 0\.12/, 'Mimar glitch 120 ms olmalı');
+assert.match(worldScene, /moveMimarTo\(islandId, startedAt/, 'Mimar Zeynep hareketiyle birlikte başlamalı');
 assert.match(main, /const GHOST_REFRESH_MS = 180_000/, 'Hayalet yenileme aralığı 180 saniye olmalı');
 assert.match(main, /modeId === 'explore' \|\| modeId === 'region'/, 'Hayalet sorgusu yalnız Gezinti/Bölge modlarında çalışmalı');
 assert.match(main, /!document\.hidden[\s\S]*!puzzleOpen/, 'Hayalet sorgusu arka plan ve puzzle sırasında durmalı');
 assert.match(main, /ghostNewestIds\.slice\(0, 4\)/, 'Bölge haritasında en yeni dört hayalet etiketlenmeli');
 assert.match(main, /distanceToSquared\(activeCamera\.position\)[\s\S]*\.slice\(0, 3\)/, 'Gezintide kameraya en yakın üç hayalet etiketlenmeli');
 assert.match(main, /const NOTE_BATCH_SIZE = 6/, 'Not ekranı altışarlı seçenek göstermeli');
+assert.match(main, /is-mimar-compact/, 'Mimar konuşurken ada paneli kompakt moda geçmeli');
+assert.match(gameCss, /\.island-card\.is-mimar-compact/, 'Kompakt ada paneli stili bulunmalı');
 assert.match(main, /showMoreNotePhrases/, 'Not ekranında başka altılı gösterme davranışı olmalı');
 assert.match(gameCss, /\.note-room[\s\S]*overflow: hidden/, 'Mobil not katmanı kaydırmasız kalmalı');
 
 assert.match(shotScript, /width: 390, height: 844/, 'QA çekimi 390×844 viewport kullanmalı');
 assert.match(shotScript, /use-angle=swiftshader/, 'QA çekimi SwiftShader WebGL seçeneğini kullanmalı');
 assert.match(shotScript, /01-gate-top\.png[\s\S]*11-ghost-region\.png/, 'On bir sabit QA görüntüsü üretilmeli');
+assert.match(shotScript, /12-mimar-idle\.png[\s\S]*14-mimar-glitch\.png/, 'Üç Mimar QA görüntüsü üretilmeli');
 assert.match(shotScript, /firebase', 'off'/, 'QA gerçek Firebase ağını kapatmalı');
 for (const preset of ['puzzle-room', 'solved-bridge', 'region-2', 'nickname']) {
   assert.match(main, new RegExp(`'${preset}'`), `${preset} QA preset'i kayıtlı olmalı`);
@@ -174,6 +196,27 @@ for (const preset of ['puzzle-room', 'solved-bridge', 'region-2', 'nickname']) {
 for (const preset of ['world-counter', 'island-stats', 'ghost-region']) {
   assert.match(main, new RegExp(`'${preset}'`), `${preset} topluluk QA preset'i kayıtlı olmalı`);
 }
+for (const preset of ['mimar-idle', 'mimar-transparency', 'mimar-glitch']) {
+  assert.match(main, new RegExp(`'${preset}'`), `${preset} Mimar QA preset'i kayıtlı olmalı`);
+}
+
+const mimarRecords = JSON.parse(mimarJsonText);
+assert.ok(mimarRecords.length >= 20, 'Mimar placeholder içeriği gerekli olayları kapsamalı');
+assert.ok(mimarRecords.every((record) => record.lines.every((line) => line.startsWith('[PH]'))),
+  'Bütün Mimar satırları [PH] taşımalı');
+assert.match(dialogueSource, /export function createDialogueController/, 'Test edilebilir diyalog controller bulunmalı');
+assert.match(dialogueSource, /export function validateDialogueRecords/, 'Mimar JSON şema doğrulaması bulunmalı');
+assert.match(dialogueSource, /right\.record\.priority - left\.record\.priority/, 'Priority sıralaması uygulanmalı');
+assert.match(dialogueSource, /const queue = \[\]/, 'Diyalog trigger kuyruğu bulunmalı');
+assert.match(main, /startMimarFirstLaunch/, 'Karşılama ve şeffaflık zinciri bağlanmalı');
+for (const trigger of [
+  'first_launch', 'island_reachable', 'puzzle_enter', 'puzzle_solved', 'bridge_opened',
+  'region_bridge_opened', 'region_entered', 'note_left', 'idle_60s',
+  'leaderboard_opened', 'world_map_opened',
+]) {
+  assert.ok(main.includes(`'${trigger}'`) || dialogueSource.includes(`'${trigger}'`), `${trigger} trigger'i bağlanmalı`);
+}
+assert.match(verifyDialogueSource, /Karşılama → şeffaflık zinciri/, 'Diyalog zinciri otomatik test edilmeli');
 
 assert.match(firebaseSource, /from 'firebase\/app'/, 'Firebase app modular import kullanılmalı');
 assert.match(firebaseSource, /from 'firebase\/auth'/, 'Firebase auth modular import kullanılmalı');
@@ -190,6 +233,7 @@ assert.match(main, /import\('\.\/firebase\.js'\)/, 'Firebase dünya kurulduktan 
 assert.match(firebaseSource, /permission|Kayıt başarısız/, 'Yazma hataları oyun akışını durdurmadan yakalanmalı');
 assert.match(playerStore, /hydratePlayerDocument/, 'Oyuncu hydration katmanı bulunmalı');
 assert.match(playerStore, /serializePlayerState/, 'Oyuncu serialization katmanı bulunmalı');
+assert.match(playerStore, /mimarFlags/, 'Oyuncu belgesinde Mimar flag hydration/serialization bulunmalı');
 assert.equal(NICKNAME_ADJECTIVES.length >= 40, true, 'En az 40 sıfat olmalı');
 assert.equal(NICKNAME_ANIMALS.length >= 40, true, 'En az 40 hayvan olmalı');
 assert.equal(new Set(NICKNAME_ADJECTIVES).size, NICKNAME_ADJECTIVES.length, 'Sıfatlar benzersiz olmalı');
@@ -225,6 +269,7 @@ assert.equal('hosting' in firebaseConfig, false, 'Firebase Hosting yapılandır�
 assert.match(firestoreRules, /match \/players\/\{uid\}/, 'Kurallar players/{uid} yolunu korumalı');
 assert.match(firestoreRules, /request\.auth\.uid == uid/, 'Oyuncu yalnız kendi belgesine erişebilmeli');
 assert.match(firestoreRules, /validSolvedUpdate/, 'Yalnız değişen solved kaydı doğrulanmalı');
+assert.match(firestoreRules, /validMimarFlags/, 'Kurallar Mimar flag listesini doğrulamalı');
 for (const rulePath of ['aggregateContributions', 'counters/global/shards', 'islandStats', 'leaderboard', 'noteChoices', 'notes']) {
   assert.ok(firestoreRules.includes(rulePath), `Kurallarda ${rulePath} koruması bulunmalı`);
 }
@@ -232,6 +277,7 @@ assert.match(firestoreRules, /match \/\{document=\*\*\}/, 'Diğer koleksiyonlar 
 assert.match(rulesGenerator, /Rules ifade tahmini/, 'Rules generator ifade maliyetini raporlamalı');
 assert.match(rulesGenerator, /warningAt: 750/, 'Rules generator sınıra yaklaşma eşiği içermeli');
 assert.match(rulesGenerator, /NOTE_PHRASES/, 'Rules generator not ID’lerini kaynak dosyadan almalı');
+assert.match(rulesGenerator, /mimar\.json/, 'Rules generator Mimar flag’lerini veri dosyasından almalı');
 assert.match(viteConfig, /manifest: true/, 'Chunk doğrulaması için Vite manifest üretmeli');
 assert.match(chunkVerifier, /700_000/, 'İlk chunk 700 kB sınırı otomatik doğrulanmalı');
 assert.match(livePersistenceScript, /page\.reload/, 'Canlı Playwright testi sayfayı yenilemeli');
@@ -257,4 +303,4 @@ assert.match(generatedRulesCheck, /birebir güncel/, 'Üretilen ve commit edilec
 
 console.log('Proje sözleşmesi doğrulandı');
 console.log(`  Three.js: ${packageJson.dependencies.three}`);
-console.log('  Progress, Firebase/topluluk kalıcılığı, güvenlik sınırları ve 11 QA kontrolü: tamam');
+console.log('  Progress, Firebase/topluluk/Mimar kalıcılığı, güvenlik sınırları ve 14 QA kontrolü: tamam');

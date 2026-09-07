@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { NOTE_PHRASES } from '../src/notePhrases.js';
+import { validateDialogueRecords } from '../src/dialogue/index.js';
 
 const rulesPath = new URL('../firestore.rules', import.meta.url);
 const world = JSON.parse(await readFile(new URL('../src/world.json', import.meta.url), 'utf8'));
-validateInputs(world, NOTE_PHRASES);
+const mimarRecords = JSON.parse(await readFile(new URL('../src/dialogue/mimar.json', import.meta.url), 'utf8'));
+const dialogueValidation = validateDialogueRecords(mimarRecords, world);
+validateInputs(world, NOTE_PHRASES, dialogueValidation.knownFlags);
 
-const rules = generateRules(world, NOTE_PHRASES);
-const estimate = estimateWorstCaseExpressions(world, NOTE_PHRASES);
+const rules = generateRules(world, NOTE_PHRASES, dialogueValidation.knownFlags);
+const estimate = estimateWorstCaseExpressions(world, NOTE_PHRASES, dialogueValidation.knownFlags);
 reportEstimate(estimate);
 
 if (process.argv.includes('--check')) {
@@ -20,18 +23,19 @@ if (process.argv.includes('--check')) {
   console.log(`firestore.rules üretildi: ${fileURLToPath(rulesPath)}`);
 }
 
-function generateRules(data, phrases) {
+function generateRules(data, phrases, mimarFlags) {
   const regionIds = data.regions.map(({ id }) => id);
   const islandIds = data.islands.map(({ id }) => id);
   const bridgeIds = data.bridges.map(({ id }) => id);
   const regionBridgeIds = data.regionBridges.map(({ id }) => id);
   const phraseIds = phrases.map(({ id }) => id);
+  const mimarFlagIds = [...mimarFlags];
   const islandPattern = exactPattern(islandIds);
   const regionPattern = exactPattern(regionIds);
   const phrasePattern = exactPattern(phraseIds);
   const playerFields = [
     'nickname', 'createdAt', 'lastSeenAt', 'activeRegionId', 'currentIslandId',
-    'solvedCount', 'solved', 'openBridges', 'openRegionBridges', 'schemaVersion',
+    'solvedCount', 'solved', 'openBridges', 'openRegionBridges', 'mimarFlags', 'schemaVersion',
   ];
   const regionIslandChecks = data.regions.map((region, index) => {
     const prefix = index === 0 ? '        (' : '        || (';
@@ -136,6 +140,15 @@ ${formatList(regionBridgeIds, 10)}
         ]);
     }
 
+    function validMimarFlags(value) {
+      return value is list
+        && value.size() <= 64
+        && value.size() == value.toSet().size()
+        && value.hasOnly([
+${formatList(mimarFlagIds, 10)}
+        ]);
+    }
+
     function validPlayer(data) {
       return data.keys().hasAll([
 ${formatList(playerFields, 10)}
@@ -152,7 +165,8 @@ ${formatList(playerFields, 10)}
         && validRegionAndIsland(data)
         && validSolvedShape(data.solved)
         && validOpenBridges(data.openBridges)
-        && validOpenRegionBridges(data.openRegionBridges);
+        && validOpenRegionBridges(data.openRegionBridges)
+        && validMimarFlags(data.mimarFlags);
     }
 
     function validPlayerSolvedCountUpdate(after, before) {
@@ -374,8 +388,9 @@ ${formatList(playerFields, 10)}
 `;
 }
 
-function estimateWorstCaseExpressions(data, phrases) {
-  const generatedLiterals = data.bridges.length + data.regionBridges.length + data.regions.length + 20;
+function estimateWorstCaseExpressions(data, phrases, mimarFlags) {
+  const generatedLiterals = data.bridges.length + data.regionBridges.length
+    + data.regions.length + phrases.length + mimarFlags.size + 20;
   return { estimated: 250 + generatedLiterals, warningAt: 750, limit: 1000 };
 }
 
@@ -385,11 +400,13 @@ function reportEstimate({ estimated, warningAt, limit }) {
   if (estimated >= warningAt) console.warn(`UYARI: Tahmini rules maliyeti ${warningAt} uyarı eşiğine ulaştı`);
 }
 
-function validateInputs(data, phrases) {
+function validateInputs(data, phrases, mimarFlags) {
   for (const key of ['regions', 'islands', 'bridges', 'regionBridges']) {
     assert.ok(Array.isArray(data[key]), `world.json ${key} listesi içermeli`);
   }
   assert.ok(phrases.length >= 24, 'En az 24 not cümlesi olmalı');
+  assert.ok(mimarFlags.size > 0 && mimarFlags.size <= 64, 'Mimar flag sayısı 1–64 olmalı');
+  [...mimarFlags].forEach((flag) => assert.match(flag, /^[a-z0-9][a-z0-9._-]{0,39}$/));
   assertUnique(data.regions, 'Bölge');
   assertUnique(data.islands, 'Ada');
   assertUnique(data.bridges, 'Ada köprüsü');
@@ -424,6 +441,6 @@ function exactPattern(values) {
 }
 
 function quote(value) {
-  assert.match(value, /^[A-Za-z0-9-]+$/, `Rules için güvenli olmayan değer: ${value}`);
+  assert.match(value, /^[A-Za-z0-9._-]+$/, `Rules için güvenli olmayan değer: ${value}`);
   return `'${value}'`;
 }

@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import worldData from './world.json';
+import mimarRecords from './dialogue/mimar.json';
+import { createDialogueController, validateDialogueRecords } from './dialogue/index.js';
 import { generateNickname } from './nicknames.js';
 import { NOTE_PHRASES, NOTE_PHRASE_BY_ID } from './notePhrases.js';
 import {
@@ -64,23 +66,36 @@ const noteMore = document.querySelector('#note-more');
 const noteSubmit = document.querySelector('#note-submit');
 const noteSkip = document.querySelector('#note-skip');
 const noteError = document.querySelector('#note-error');
+const mimarDialogue = document.querySelector('#mimar-dialogue');
+const mimarDialogueText = document.querySelector('#mimar-dialogue-text');
+const mimarSkip = document.querySelector('#mimar-skip');
+const debugDialogueSelect = document.querySelector('#debug-dialogue-select');
+const debugTriggerDialogue = document.querySelector('#debug-trigger-dialogue');
+const debugMimarFlags = document.querySelector('#debug-mimar-flags');
+const debugResetMimarFlags = document.querySelector('#debug-reset-mimar-flags');
 
 const GHOST_REFRESH_MS = 180_000;
 const NOTE_BATCH_SIZE = 6;
+const IDLE_DIALOGUE_MS = 60_000;
+const TYPEWRITER_CHARACTERS_PER_SECOND = 30;
+const dialogueValidation = validateDialogueRecords(mimarRecords, worldData);
+const validMimarFlags = dialogueValidation.knownFlags;
 
 const searchParams = new URLSearchParams(window.location.search);
 const debugMode = searchParams.get('debug') === '1';
 const cameraPresetId = searchParams.get('cam');
 const forceOffline = debugMode
   && (searchParams.get('firebase') === 'off'
-    || ['nickname', 'world-counter', 'island-stats', 'ghost-region'].includes(cameraPresetId));
+    || ['nickname', 'world-counter', 'island-stats', 'ghost-region',
+      'mimar-idle', 'mimar-transparency', 'mimar-glitch'].includes(cameraPresetId));
 loading.textContent = 'Dünya kuruluyor…';
-const hydratedPlayer = hydratePlayerDocument(worldData);
+const hydratedPlayer = hydratePlayerDocument(worldData, {}, { validMimarFlags });
 let persistence = createBootstrapPersistence();
 let community = createBootstrapCommunity();
 let playerId = 'local';
 let playerNickname = hydratedPlayer.nickname;
 let puzzleRecords = hydratedPlayer.puzzleRecords;
+let mimarFlags = new Set(hydratedPlayer.mimarFlags);
 let nicknameCandidate = '';
 let nicknameConfirming = false;
 let nicknameRequired = false;
@@ -95,6 +110,11 @@ let selectedNotePhraseId = null;
 let notePhraseDeck = [];
 let notePhraseCursor = 0;
 let visibleNotePhraseIds = new Set();
+let noteRoomResolve = null;
+let mimarPresentation = null;
+let mimarTypewriterFrame = null;
+let idleDialogueTimer = null;
+let idleDialogueFired = false;
 const puzzleAttemptStartedAt = new Map();
 const clock = new THREE.Clock();
 const placeholderScene = new THREE.Scene();
@@ -109,6 +129,18 @@ const pipeline = createRenderPipeline(canvas, placeholderScene, perspectiveCamer
 const textures = createWorldTextureLibrary(pipeline.renderer);
 const progress = createProgress(worldData, hydratedPlayer.progressState);
 const world = createWorldScene({ renderer: pipeline.renderer, textures, data: worldData, debugMode });
+const mimarController = createDialogueController({
+  records: mimarRecords,
+  getContext: getMimarContext,
+  getFlags: () => new Set(mimarFlags),
+  setFlags: applyMimarFlags,
+  present: presentMimarDialogue,
+});
+mimarController.subscribe((state) => {
+  world.setMimarSpeaking(state.speaking);
+  islandCard.classList.toggle('is-mimar-compact', state.speaking);
+  syncIdleDialogueLifecycle();
+});
 if (progress.state.activeRegionId !== worldData.regions[0].id) {
   world.createDetailedRegion(progress.state.activeRegionId);
   world.moveCharacterTo(progress.state.currentIslandId, 0, 0);
@@ -195,6 +227,27 @@ const CAMERA_PRESETS = {
     modeId: 'region',
     qaState: 'ghost-region',
   },
+  'mimar-idle': {
+    modeId: 'explore',
+    islandId: 'helios-01',
+    positionOffset: new THREE.Vector3(42, 31, 48),
+    targetOffset: new THREE.Vector3(-2.5, 4.2, 1.8),
+    qaState: 'mimar-idle',
+  },
+  'mimar-transparency': {
+    modeId: 'explore',
+    islandId: 'helios-01',
+    positionOffset: new THREE.Vector3(42, 31, 48),
+    targetOffset: new THREE.Vector3(-2.5, 4.2, 1.8),
+    qaState: 'mimar-transparency',
+  },
+  'mimar-glitch': {
+    modeId: 'explore',
+    islandId: 'helios-01',
+    positionOffset: new THREE.Vector3(27, 18, 30),
+    targetOffset: new THREE.Vector3(-2.5, 5, 1.8),
+    qaState: 'mimar-glitch',
+  },
 };
 
 let modeIndex = 0;
@@ -239,7 +292,14 @@ document.body.dataset.mode = MODES[modeIndex].id;
 document.body.dataset.inputLocked = 'true';
 fpsElement.hidden = !debugMode;
 debugControls.hidden = !debugMode || Boolean(cameraPresetId);
+mimarRecords.forEach((record) => {
+  const option = document.createElement('option');
+  option.value = record.id;
+  option.textContent = `${record.id} · ${record.trigger}`;
+  debugDialogueSelect.append(option);
+});
 updateCard();
+updateMimarDebug();
 window.__CAMERA_PRESET_READY__ = false;
 window.__QA_STATE_READY__ = false;
 window.__QA_FRAME_COUNT__ = 0;
@@ -255,17 +315,30 @@ cardAction.addEventListener('click', () => cardActionHandler?.());
 debugSolveIsland.addEventListener('click', solveSelectedIslandForDebug);
 debugSolveRegion.addEventListener('click', solveActiveRegionForDebug);
 debugResetProgress.addEventListener('click', resetProgressForDebug);
+debugTriggerDialogue.addEventListener('click', triggerSelectedDialogueForDebug);
+debugResetMimarFlags.addEventListener('click', resetMimarFlagsForDebug);
 nicknameRegenerate.addEventListener('click', regenerateNickname);
 nicknameConfirm.addEventListener('click', confirmNickname);
 noteSubmit.addEventListener('click', submitNote);
 noteMore.addEventListener('click', showMoreNotePhrases);
 noteSkip.addEventListener('click', closeNoteRoom);
+mimarDialogue.addEventListener('click', onMimarDialogueClick);
+mimarDialogue.addEventListener('keydown', onMimarDialogueKeyDown);
+mimarSkip.addEventListener('click', (event) => {
+  event.stopPropagation();
+  finishMimarDialogue(true);
+});
 document.addEventListener('visibilitychange', onVisibilityChange);
+window.addEventListener('pointerdown', noteUserActivity, { capture: true, passive: true });
+window.addEventListener('touchstart', noteUserActivity, { capture: true, passive: true });
+window.addEventListener('keydown', noteUserActivity, { capture: true });
 window.addEventListener('resize', resize, { passive: true });
 window.addEventListener('pagehide', () => {
   if (heartbeatTimer) window.clearInterval(heartbeatTimer);
   if (ghostRefreshTimer) window.clearInterval(ghostRefreshTimer);
   if (counterAnimationFrame) cancelAnimationFrame(counterAnimationFrame);
+  if (mimarTypewriterFrame) cancelAnimationFrame(mimarTypewriterFrame);
+  if (idleDialogueTimer) window.clearTimeout(idleDialogueTimer);
   community.dispose();
   persistence.dispose();
 }, { once: true });
@@ -296,6 +369,8 @@ world.ready
       setInputLocked(false);
       startHeartbeat();
       syncGhostRefreshLifecycle();
+      syncIdleDialogueLifecycle();
+      if (!cameraPresetId) void startMimarFirstLaunch();
     }
     refreshDiagnostics();
   })
@@ -334,12 +409,13 @@ async function initializeBackend() {
   persistence.subscribe(updateSyncStatus);
   const loadedPlayer = await persistence.loadPlayer();
   const nextHydratedPlayer = loadedPlayer.ok && loadedPlayer.exists
-    ? hydratePlayerDocument(worldData, loadedPlayer.data)
-    : hydratePlayerDocument(worldData);
+    ? hydratePlayerDocument(worldData, loadedPlayer.data, { validMimarFlags })
+    : hydratePlayerDocument(worldData, {}, { validMimarFlags });
 
   playerId = persistence.playerId;
   playerNickname = nextHydratedPlayer.nickname;
   puzzleRecords = nextHydratedPlayer.puzzleRecords;
+  mimarFlags = new Set(nextHydratedPlayer.mimarFlags);
   nicknameRequired = persistence.mode === 'firebase'
     && loadedPlayer.ok
     && (!loadedPlayer.exists || !playerNickname);
@@ -365,11 +441,18 @@ async function initializeBackend() {
     qaPreset: cameraPresetId,
   });
   backendInitialized = true;
+  if (persistence.mode === 'firebase'
+    && loadedPlayer.ok
+    && loadedPlayer.exists
+    && !Array.isArray(loadedPlayer.data?.mimarFlags)) {
+    void persistence.savePlayer({ mimarFlags: [] }, 'mimar-flags-migration');
+  }
   if (persistence.mode === 'firebase' && loadedPlayer.ok && loadedPlayer.exists && playerNickname) {
     const registration = communityPayload({ lastSeenAt: SERVER_TIMESTAMP_MARKER });
     void community.ensureRegistration(registration);
   }
   updateIdentityDebug();
+  updateMimarDebug();
   updateCard();
 }
 
@@ -393,7 +476,10 @@ function beginModeTransition(nextIndex) {
   modeButton.setAttribute('aria-label', `Kamera modu: ${nextMode.label}`);
   if (nextMode.id === 'world') selectedRegionId = progress.state.activeRegionId;
   updateCard();
-  if (nextMode.id === 'world') void refreshWorldCommunity();
+  if (nextMode.id === 'world') {
+    void triggerMimar('world_map_opened');
+    void refreshWorldCommunity();
+  }
   showModeTitle(nextMode.label);
 
   cameraTransition = {
@@ -556,6 +642,12 @@ async function applyCameraPreset(presetId) {
   if (preset.qaState === 'world-counter') await refreshWorldCommunity({ fresh: true, instant: true });
   if (preset.qaState === 'island-stats') await refreshIslandCommunity('helios-01');
   if (preset.qaState === 'ghost-region') await refreshGhosts();
+  if (preset.qaState === 'mimar-transparency') {
+    void mimarController.runById('transparency', getMimarContext());
+    await nextFrame();
+    completeMimarLine();
+  }
+  if (preset.qaState === 'mimar-glitch') world.setMimarGlitch(true);
   window.__QA_STATE_READY__ = presetId;
   window.__CAMERA_PRESET_READY__ = presetId;
 }
@@ -794,6 +886,7 @@ async function refreshWorldCommunity({ fresh = false, instant = false } = {}) {
       item.append(count);
       return item;
     }));
+    void triggerMimar('leaderboard_opened');
   } catch (error) {
     console.warn('[community] Dünya özeti okunamadı.', error);
   }
@@ -875,6 +968,7 @@ function syncGhostRefreshLifecycle() {
 
 function onVisibilityChange() {
   syncGhostRefreshLifecycle();
+  syncIdleDialogueLifecycle();
   if (!document.hidden && backendInitialized && MODES[modeIndex].id === 'world') {
     void refreshWorldCommunity({ fresh: true });
   }
@@ -893,8 +987,10 @@ async function showNoteRoom(islandId) {
   noteRoom.hidden = false;
   noteRoom.setAttribute('aria-hidden', 'false');
   setInputLocked(true);
+  syncIdleDialogueLifecycle();
   await nextFrame();
   noteRoom.classList.add('is-open');
+  return new Promise((resolve) => { noteRoomResolve = resolve; });
 }
 
 function renderNextNotePhraseBatch() {
@@ -938,27 +1034,31 @@ function selectNotePhrase(phraseId) {
   noteSubmit.disabled = false;
 }
 
-function submitNote() {
+async function submitNote() {
   if (!noteIslandId || !selectedNotePhraseId) return;
   const islandId = noteIslandId;
   const phraseId = selectedNotePhraseId;
   void community.leaveNote(islandId, phraseId).then(() => refreshIslandCommunity(islandId));
-  closeNoteRoom();
+  await closeNoteRoom();
+  void triggerMimar('note_left', { islandId });
 }
 
-function closeNoteRoom() {
-  if (noteRoom.hidden) return;
+async function closeNoteRoom() {
+  if (noteRoom.hidden) return false;
   noteRoom.classList.remove('is-open');
-  window.setTimeout(() => {
-    noteRoom.hidden = true;
-    noteRoom.setAttribute('aria-hidden', 'true');
-  }, 300);
+  await wait(300);
+  noteRoom.hidden = true;
+  noteRoom.setAttribute('aria-hidden', 'true');
   noteIslandId = null;
   selectedNotePhraseId = null;
   notePhraseDeck = [];
   notePhraseCursor = 0;
   visibleNotePhraseIds = new Set();
   setInputLocked(false);
+  syncIdleDialogueLifecycle();
+  noteRoomResolve?.(true);
+  noteRoomResolve = null;
+  return true;
 }
 
 function shuffleItems(items) {
@@ -978,6 +1078,189 @@ function timestampMillis(value) {
   return 0;
 }
 
+function getMimarContext(overrides = {}) {
+  const islandId = overrides.islandId || progress.state.currentIslandId;
+  const island = islandById.get(islandId);
+  const regionId = overrides.regionId || island?.regionId || progress.state.activeRegionId;
+  const region = regionById.get(regionId);
+  return {
+    nickname: playerNickname || 'Gökyüzü Gezgini',
+    solvedCount: progress.state.solvedIslands.size,
+    islandId,
+    islandName: island?.name || '',
+    regionId,
+    regionName: region?.name || '',
+    ...overrides,
+  };
+}
+
+function triggerMimar(triggerName, context = {}) {
+  if (cameraPresetId) return Promise.resolve(false);
+  return mimarController.trigger(triggerName, getMimarContext(context));
+}
+
+async function startMimarFirstLaunch() {
+  await triggerMimar('first_launch');
+  await triggerMimar('first_launch');
+}
+
+function applyMimarFlags(flags) {
+  let changed = false;
+  flags.forEach((flag) => {
+    if (!validMimarFlags.has(flag) || mimarFlags.has(flag)) return;
+    mimarFlags.add(flag);
+    changed = true;
+  });
+  if (!changed) return Promise.resolve(true);
+  updateMimarDebug();
+  void queuePlayerSave('mimar-flags', { mimarFlags: [...mimarFlags] });
+  return Promise.resolve(true);
+}
+
+function presentMimarDialogue(record, lines) {
+  return new Promise((resolve) => {
+    mimarPresentation = {
+      record,
+      lines,
+      lineIndex: 0,
+      lineComplete: false,
+      resolve,
+    };
+    mimarSkip.hidden = record.id === 'transparency';
+    mimarDialogue.hidden = false;
+    mimarDialogue.setAttribute('aria-hidden', 'false');
+    mimarDialogue.getBoundingClientRect();
+    mimarDialogue.classList.add('is-open');
+    showMimarLine();
+    syncIdleDialogueLifecycle();
+  });
+}
+
+function showMimarLine() {
+  if (!mimarPresentation) return;
+  if (mimarTypewriterFrame) cancelAnimationFrame(mimarTypewriterFrame);
+  mimarTypewriterFrame = null;
+  const characters = Array.from(mimarPresentation.lines[mimarPresentation.lineIndex]);
+  mimarPresentation.characters = characters;
+  mimarPresentation.lineComplete = false;
+  mimarDialogueText.textContent = '';
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    completeMimarLine();
+    return;
+  }
+  const startedAt = performance.now();
+  const tick = (now) => {
+    if (!mimarPresentation || mimarPresentation.lineComplete) return;
+    const length = Math.min(
+      characters.length,
+      Math.floor((now - startedAt) / 1000 * TYPEWRITER_CHARACTERS_PER_SECOND),
+    );
+    mimarDialogueText.textContent = characters.slice(0, length).join('');
+    if (length >= characters.length) {
+      mimarPresentation.lineComplete = true;
+      mimarTypewriterFrame = null;
+      return;
+    }
+    mimarTypewriterFrame = requestAnimationFrame(tick);
+  };
+  mimarTypewriterFrame = requestAnimationFrame(tick);
+}
+
+function completeMimarLine() {
+  if (!mimarPresentation) return;
+  if (mimarTypewriterFrame) cancelAnimationFrame(mimarTypewriterFrame);
+  mimarTypewriterFrame = null;
+  mimarDialogueText.textContent = mimarPresentation.characters?.join('')
+    || mimarPresentation.lines[mimarPresentation.lineIndex];
+  mimarPresentation.lineComplete = true;
+}
+
+function advanceMimarDialogue() {
+  if (!mimarPresentation) return;
+  if (!mimarPresentation.lineComplete) {
+    completeMimarLine();
+    return;
+  }
+  if (mimarPresentation.lineIndex < mimarPresentation.lines.length - 1) {
+    mimarPresentation.lineIndex += 1;
+    showMimarLine();
+    return;
+  }
+  finishMimarDialogue(false);
+}
+
+function finishMimarDialogue(skipped) {
+  if (!mimarPresentation || (skipped && mimarPresentation.record.id === 'transparency')) return;
+  const completed = mimarPresentation;
+  mimarPresentation = null;
+  if (mimarTypewriterFrame) cancelAnimationFrame(mimarTypewriterFrame);
+  mimarTypewriterFrame = null;
+  mimarDialogue.classList.remove('is-open');
+  window.setTimeout(() => {
+    mimarDialogue.hidden = true;
+    mimarDialogue.setAttribute('aria-hidden', 'true');
+    completed.resolve(true);
+  }, 180);
+}
+
+function onMimarDialogueClick(event) {
+  if (event.target.closest('button')) return;
+  event.stopPropagation();
+  advanceMimarDialogue();
+}
+
+function onMimarDialogueKeyDown(event) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  advanceMimarDialogue();
+}
+
+function noteUserActivity() {
+  idleDialogueFired = false;
+  syncIdleDialogueLifecycle();
+}
+
+function syncIdleDialogueLifecycle() {
+  if (idleDialogueTimer) {
+    window.clearTimeout(idleDialogueTimer);
+    idleDialogueTimer = null;
+  }
+  const canWait = backendInitialized
+    && !cameraPresetId
+    && !document.hidden
+    && !nicknameRequired
+    && nicknameRoom.hidden
+    && !puzzleOpen
+    && noteRoom.hidden
+    && !mimarPresentation
+    && !idleDialogueFired;
+  if (!canWait) return;
+  idleDialogueTimer = window.setTimeout(() => {
+    idleDialogueTimer = null;
+    idleDialogueFired = true;
+    void triggerMimar('idle_60s');
+  }, IDLE_DIALOGUE_MS);
+}
+
+function triggerSelectedDialogueForDebug() {
+  if (!debugDialogueSelect.value) return;
+  void mimarController.runById(debugDialogueSelect.value, getMimarContext());
+}
+
+function resetMimarFlagsForDebug() {
+  mimarFlags = new Set();
+  updateMimarDebug();
+  void queuePlayerSave('debug-reset-mimar-flags', { mimarFlags: [] });
+  showToast('Mimar flag’leri temizlendi');
+}
+
+function updateMimarDebug() {
+  if (!debugMimarFlags) return;
+  debugMimarFlags.textContent = mimarFlags.size
+    ? `Mimar flag’leri (${mimarFlags.size})\n${[...mimarFlags].join('\n')}`
+    : 'Mimar flag’leri: boş';
+}
+
 function formatCount(value) {
   return new Intl.NumberFormat('tr-TR').format(Math.max(0, Math.round(value || 0)));
 }
@@ -989,6 +1272,7 @@ async function enterIsland(island) {
     progress.setCurrentIsland(island.id);
     await world.moveCharacterTo(island.id, elapsedTime, 0.8);
   }
+  await triggerMimar('puzzle_enter', { islandId: island.id, regionId: island.regionId });
   await openPuzzleRoom(island);
   setInputLocked(false);
 }
@@ -1002,6 +1286,7 @@ async function openPuzzleRoom(island, { instant = false, pauseRender = true } = 
   }
   puzzleOpen = true;
   syncGhostRefreshLifecycle();
+  syncIdleDialogueLifecycle();
   activePuzzle = puzzle;
   activePuzzleIsland = island;
   puzzleAttemptStartedAt.set(island.id, performance.now());
@@ -1042,6 +1327,7 @@ async function closePuzzleRoom() {
   activePuzzle = null;
   activePuzzleIsland = null;
   syncGhostRefreshLifecycle();
+  syncIdleDialogueLifecycle();
 }
 
 async function handlePuzzleSolve(island) {
@@ -1069,6 +1355,31 @@ async function handlePuzzleSolve(island) {
   }
   if (result.focusIslandId) focusIsland(result.focusIslandId, 1.5);
   if (result.newlySolved) await showNoteRoom(island.id);
+  emitSolveDialogues(island, result);
+}
+
+function emitSolveDialogues(island, result) {
+  if (!result.newlySolved) return;
+  void triggerMimar('puzzle_solved', {
+    islandId: island.id,
+    regionId: island.regionId,
+    solvedCount: progress.state.solvedIslands.size,
+  });
+  result.openedBridgeIds.forEach((bridgeId) => {
+    const regionBridge = worldData.regionBridges.find((bridge) => bridge.id === bridgeId);
+    void triggerMimar(regionBridge ? 'region_bridge_opened' : 'bridge_opened', {
+      bridgeId,
+      islandId: island.id,
+      regionId: island.regionId,
+    });
+  });
+  result.newlyReachableIslandIds.forEach((islandId) => {
+    const reachableIsland = islandById.get(islandId);
+    void triggerMimar('island_reachable', {
+      islandId,
+      regionId: reachableIsland?.regionId,
+    });
+  });
 }
 
 function pauseWorldRendering() {
@@ -1190,6 +1501,10 @@ function finishRegionTransition() {
   setInputLocked(false);
   updateCard();
   syncGhostRefreshLifecycle();
+  void triggerMimar('region_entered', {
+    regionId: progress.state.activeRegionId,
+    islandId: progress.state.currentIslandId,
+  });
 }
 
 function setInputLocked(locked) {
@@ -1212,6 +1527,7 @@ async function showNicknameRoom({ instant = false, qa = false } = {}) {
   nicknameRoom.hidden = false;
   nicknameRoom.setAttribute('aria-hidden', 'false');
   setInputLocked(true);
+  syncIdleDialogueLifecycle();
   if (instant) {
     nicknameRoom.style.transition = 'none';
     nicknameRoom.classList.add('is-open');
@@ -1241,11 +1557,11 @@ async function confirmNickname() {
   nicknameConfirm.textContent = 'Kaydediliyor…';
   const chosenNickname = nicknameCandidate;
   const patch = newPlayerDocument
-    ? createNewPlayerDocument(worldData, chosenNickname)
+    ? createNewPlayerDocument(worldData, chosenNickname, mimarFlags)
     : {
       nickname: chosenNickname,
       lastSeenAt: SERVER_TIMESTAMP_MARKER,
-      ...serializePlayerState(worldData, progress.state, puzzleRecords),
+      ...serializePlayerState(worldData, progress.state, puzzleRecords, mimarFlags),
     };
   const result = await community.ensureRegistration({
     playerPatch: patch,
@@ -1279,6 +1595,8 @@ async function confirmNickname() {
   setInputLocked(false);
   startHeartbeat();
   syncGhostRefreshLifecycle();
+  syncIdleDialogueLifecycle();
+  if (!cameraPresetId) void startMimarFirstLaunch();
 }
 
 async function queuePlayerSave(reason, overrides = {}, changedIslandId = null) {
@@ -1290,7 +1608,7 @@ async function queuePlayerSave(reason, overrides = {}, changedIslandId = null) {
 }
 
 function communityPayload(overrides = {}, changedIslandId = null) {
-  const serialized = serializePlayerState(worldData, progress.state, puzzleRecords);
+  const serialized = serializePlayerState(worldData, progress.state, puzzleRecords, mimarFlags);
   const { solved, ...progressSnapshot } = serialized;
   const playerPatch = {
     ...progressSnapshot,
@@ -1521,6 +1839,14 @@ function refreshDiagnostics() {
       currentIslandId: progress.state.currentIslandId,
     },
     cameraTransitionMilliseconds: 800,
+    mimar: {
+      visible: world.mimar.visible,
+      islandId: world.mimarIslandId,
+      speaking: world.mimarSpeaking,
+      forcedGlitch: world.mimarForcedGlitch,
+      vertexCount: world.mimar.geometry.getAttribute('position').count,
+      ...world.mimarMetrics,
+    },
     debugMode,
     cameraPresetId,
     renderer: rendererDebugInfo

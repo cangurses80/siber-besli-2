@@ -22,7 +22,7 @@ export function createInitialProgressState(worldData) {
   };
 }
 
-export function hydratePlayerDocument(worldData, source = {}) {
+export function hydratePlayerDocument(worldData, source = {}, { validMimarFlags = null } = {}) {
   const initial = createInitialProgressState(worldData);
   const validIslandIds = new Set(worldData.islands.map((island) => island.id));
   const validIslandBridgeIds = new Set(worldData.bridges.map((bridge) => bridge.id));
@@ -56,6 +56,7 @@ export function hydratePlayerDocument(worldData, source = {}) {
 
   return {
     nickname: typeof source.nickname === 'string' ? source.nickname.trim().slice(0, 40) : '',
+    mimarFlags: normalizeMimarFlags(source.mimarFlags, validMimarFlags),
     puzzleRecords,
     progressState: {
       solvedIslands: new Set(
@@ -70,7 +71,7 @@ export function hydratePlayerDocument(worldData, source = {}) {
   };
 }
 
-export function serializePlayerState(worldData, progressState, puzzleRecords = {}) {
+export function serializePlayerState(worldData, progressState, puzzleRecords = {}, mimarFlags = []) {
   const islandBridgeIds = new Set(worldData.bridges.map((bridge) => bridge.id));
   const regionBridgeIds = new Set(worldData.regionBridges.map((bridge) => bridge.id));
   const validIslandIds = new Set(worldData.islands.map((island) => island.id));
@@ -90,17 +91,18 @@ export function serializePlayerState(worldData, progressState, puzzleRecords = {
     solved,
     openBridges: [...new Set(openIds.filter((id) => islandBridgeIds.has(id)))],
     openRegionBridges: [...new Set(openIds.filter((id) => regionBridgeIds.has(id)))],
+    mimarFlags: normalizeMimarFlags(mimarFlags),
     schemaVersion: PLAYER_SCHEMA_VERSION,
   };
 }
 
-export function createNewPlayerDocument(worldData, nickname) {
+export function createNewPlayerDocument(worldData, nickname, mimarFlags = []) {
   const initial = createInitialProgressState(worldData);
   return {
     nickname: nickname.trim(),
     createdAt: SERVER_TIMESTAMP_MARKER,
     lastSeenAt: SERVER_TIMESTAMP_MARKER,
-    ...serializePlayerState(worldData, initial, {}),
+    ...serializePlayerState(worldData, initial, {}, mimarFlags),
   };
 }
 
@@ -163,6 +165,16 @@ function normalizeDuration(value) {
 function validIds(value, validSet) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((id) => typeof id === 'string' && validSet.has(id)))];
+}
+
+export function normalizeMimarFlags(value, validFlags = null) {
+  if (!Array.isArray(value)) return [];
+  const allowed = validFlags instanceof Set
+    ? validFlags
+    : Array.isArray(validFlags) ? new Set(validFlags) : null;
+  return [...new Set(value.filter((flag) => typeof flag === 'string'
+    && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(flag)
+    && (!allowed || allowed.has(flag))))].slice(0, 64);
 }
 
 function walkRegions(worldData, startRegionId, openBridgeIds) {

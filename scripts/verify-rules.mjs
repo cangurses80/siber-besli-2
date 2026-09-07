@@ -30,6 +30,22 @@ try {
   const db = testEnvironment.authenticatedContext(uid).firestore();
   await assertSucceeds(registerPlayer(db, uid, 'Cesur Baykuş', 2));
 
+  await assertSucceeds(updateDoc(doc(db, `players/${uid}`), {
+    mimarFlags: ['mimar.welcome_seen'],
+  }));
+  await assertFails(updateDoc(doc(db, `players/${uid}`), {
+    mimarFlags: ['mimar.unknown_flag'],
+  }));
+  await assertFails(updateDoc(doc(db, `players/${uid}`), {
+    mimarFlags: ['mimar.welcome_seen', 'mimar.welcome_seen'],
+  }));
+  await assertFails(updateDoc(doc(db, `players/${uid}`), {
+    mimarFlags: Array.from({ length: 65 }, (_, index) => `mimar.flag_${index}`),
+  }));
+  const intruderDb = testEnvironment.authenticatedContext('mimar-intruder').firestore();
+  await assertFails(updateDoc(doc(intruderDb, `players/${uid}`), { mimarFlags: [] }));
+  await assertSucceeds(updateDoc(doc(db, `players/${uid}`), { mimarFlags: [] }));
+
   await assertFails(updateDoc(doc(db, 'counters/global/shards/2'), { players: increment(2) }));
   await assertFails(updateDoc(doc(db, 'counters/global/shards/3'), { solved: increment(1) }));
   await assertFails(setDoc(doc(db, 'leaderboard/another-player'), profile('Sahte Panda', 0), { merge: true }));
@@ -184,6 +200,7 @@ function initialPlayer(nickname) {
     solved: {},
     openBridges: ['helios-bridge-01', 'helios-bridge-02'],
     openRegionBridges: [],
+    mimarFlags: [],
     schemaVersion: 1,
   };
 }
