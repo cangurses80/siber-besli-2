@@ -17,6 +17,9 @@ const presets = [
   ['solved-bridge', '06-solved-bridge.png'],
   ['region-2', '07-region-2.png'],
   ['nickname', '08-nickname.png'],
+  ['world-counter', '09-world-counter.png'],
+  ['island-stats', '10-island-stats.png'],
+  ['ghost-region', '11-ghost-region.png'],
 ];
 
 let serverProcess;
@@ -74,6 +77,7 @@ try {
         await page.waitForTimeout(80);
       }
       await runPuzzlePauseSmoke(page);
+      await runNoteSmoke(page);
     }
     console.log(`qa/${filename} ← ${url.href}`);
   }
@@ -190,6 +194,21 @@ async function assertPresetState(page, preset) {
     await page.getByRole('button', { name: 'Yeniden üret' }).waitFor({ state: 'visible' });
     await page.getByRole('button', { name: 'Bu olsun' }).waitFor({ state: 'visible' });
   }
+  if (preset === 'world-counter') {
+    await page.waitForFunction(() => document.querySelector('#global-solved-count')?.textContent === '1.247');
+    await page.locator('#leaderboard-list li').nth(19).waitFor({ state: 'attached' });
+  }
+  if (preset === 'island-stats') {
+    await page.getByText(/Bu adayı 1\.247 okur çözdü · ortalama 4 dk/).waitFor({ state: 'visible' });
+    await page.locator('#island-note-list li').nth(2).waitFor({ state: 'visible' });
+  }
+  if (preset === 'ghost-region') {
+    await page.waitForFunction(() => {
+      const labels = [...document.querySelectorAll('.ghost-label')];
+      return labels.length === 12
+        && labels.filter((label) => getComputedStyle(label).display !== 'none').length === 4;
+    });
+  }
 }
 
 async function runPuzzlePauseSmoke(page) {
@@ -203,4 +222,35 @@ async function runPuzzlePauseSmoke(page) {
       && window.__QA_FRAME_COUNT__ > previousFrameCount,
     frameCount,
   );
+}
+
+async function runNoteSmoke(page) {
+  await page.getByRole('button', { name: 'Gir' }).click();
+  await page.waitForFunction(() => window.__RENDER_PAUSED__ === true);
+  await page.getByRole('button', { name: 'Çöz' }).click();
+  await page.locator('#note-room.is-open').waitFor({ state: 'visible' });
+  const firstPhraseIds = await page.locator('.note-phrase').evaluateAll(
+    (buttons) => buttons.map((button) => button.dataset.phraseId),
+  );
+  if (firstPhraseIds.length !== 6) throw new Error(`Not ekranında 6 yerine ${firstPhraseIds.length} cümle var`);
+  await page.getByRole('button', { name: 'Başkalarını göster' }).click();
+  const secondPhraseIds = await page.locator('.note-phrase').evaluateAll(
+    (buttons) => buttons.map((button) => button.dataset.phraseId),
+  );
+  if (secondPhraseIds.length !== 6 || secondPhraseIds.some((id) => firstPhraseIds.includes(id))) {
+    throw new Error('Başkalarını göster yeni ve benzersiz 6 cümle üretmedi');
+  }
+  const fitsViewport = await page.evaluate(() => {
+    const room = document.querySelector('#note-room');
+    const card = document.querySelector('.note-card');
+    const skip = document.querySelector('#note-skip');
+    const bounds = skip.getBoundingClientRect();
+    return room.scrollHeight <= room.clientHeight
+      && card.scrollHeight <= card.clientHeight
+      && bounds.top >= 0
+      && bounds.bottom <= window.innerHeight;
+  });
+  if (!fitsViewport) throw new Error('Not ekranı 390×844 viewport içine kaydırmasız sığmıyor');
+  await page.getByRole('button', { name: 'Not bırakmadan geç' }).click();
+  await page.waitForFunction(() => document.querySelector('#note-room').hidden === true);
 }

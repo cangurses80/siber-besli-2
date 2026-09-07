@@ -68,6 +68,15 @@ assert.ok(hydratedProgress.state.solvedIslands.has('helios-01'));
 assert.equal(hydratedProgress.state.solvedIslands.has('bilinmeyen-ada'), false);
 assert.ok(hydratedProgress.state.openBridges.has('helios-bridge-03'));
 assert.equal(hydratedProgress.state.currentIslandId, 'helios-03');
+hydratedProgress.hydrate({
+  solvedIslands: ['helios-02'],
+  openBridges: ['helios-bridge-04'],
+  activeRegionId: 'helios',
+  currentIslandId: 'helios-02',
+});
+assert.deepEqual([...hydratedProgress.state.solvedIslands], ['helios-02']);
+assert.ok(hydratedProgress.state.openBridges.has('helios-bridge-04'));
+assert.equal(hydratedProgress.state.currentIslandId, 'helios-02');
 assert.equal(hydratedProgress.reset(), true);
 assert.equal(hydratedProgress.state.solvedIslands.size, 0);
 assert.deepEqual([...hydratedProgress.state.openBridges].sort(), ['helios-bridge-01', 'helios-bridge-02']);

@@ -21,6 +21,7 @@ import {
   persistentMultipleTabManager,
   serverTimestamp,
   setDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   DELETE_FIELD_MARKER,
@@ -78,6 +79,7 @@ export async function createPlayerPersistence({ forceOffline = false } = {}) {
     const playerId = user.uid;
     const playerRef = doc(db, 'players', playerId);
     let writeInFlight = null;
+    let atomicTail = Promise.resolve();
 
     console.info('[firebase] Anonim kimlik hazır.', {
       uid: playerId,
@@ -127,10 +129,56 @@ export async function createPlayerPersistence({ forceOffline = false } = {}) {
         return { ok: false, reason: 'hydration-required' };
       }
       if (!writeInFlight) {
-        writeInFlight = flushPendingWrites(reason, expectedNickname)
+        writeInFlight = atomicTail.then(() => flushPendingWrites(reason, expectedNickname))
           .finally(() => { writeInFlight = null; });
       }
       return writeInFlight;
+    }
+
+    async function savePlayerAtomically(
+      patch,
+      reason,
+      addBatchWrites,
+      { expectedNickname = null } = {},
+    ) {
+      const priorWrite = writeInFlight;
+      const run = async () => {
+        if (!hydrated) {
+          setStatus('pending', 'hydration-required');
+          return { ok: false, reason: 'hydration-required' };
+        }
+        if (priorWrite) await priorWrite;
+        setStatus(navigator.onLine ? 'saving' : 'pending', reason);
+        console.info('[firebase] Atomik yazma başladı.', { path: playerRef.path, reason });
+        try {
+          const batch = writeBatch(db);
+          batch.set(playerRef, replaceTimestampMarkers(patch), { merge: true });
+          await addBatchWrites?.({ batch, db, playerId, playerRef });
+          await withTimeout(batch.commit(), 12_000, 'batch-timeout');
+          const confirmedSnapshot = await withTimeout(
+            getDocFromServer(playerRef),
+            12_000,
+            'readback-timeout',
+          );
+          if (!confirmedSnapshot.exists()) throw createPersistenceError('document-missing');
+          if (expectedNickname !== null
+            && confirmedSnapshot.data().nickname !== expectedNickname) {
+            throw createPersistenceError('nickname-mismatch');
+          }
+          console.info('[firebase] Atomik yazma sunucuda doğrulandı.', {
+            path: playerRef.path,
+            reason,
+          });
+          setStatus('saved');
+          return { ok: true, data: confirmedSnapshot.data() };
+        } catch (error) {
+          handleWriteError(error, setStatus);
+          return { ok: false, reason: error?.code || error?.message || 'batch-failed', error };
+        }
+      };
+      const queued = atomicTail.then(run, run);
+      atomicTail = queued.then(() => undefined, () => undefined);
+      return queued;
     }
 
     async function flushPendingWrites(reason, expectedNickname) {
@@ -180,8 +228,10 @@ export async function createPlayerPersistence({ forceOffline = false } = {}) {
       mode: 'firebase',
       playerId,
       authPersistence,
+      firestore: db,
       loadPlayer,
       savePlayer,
+      savePlayerAtomically,
       subscribe,
       get status() { return status; },
       dispose() {
@@ -222,10 +272,12 @@ function createMemoryPersistence({ forced, subscribe, getStatus, error = null })
     mode: 'memory',
     playerId: 'local',
     authPersistence: 'none',
+    firestore: null,
     forcedOffline: forced,
     startupError: error,
     async loadPlayer() { return { ok: true, exists: false, data: null }; },
     async savePlayer() { return { ok: false, reason: 'offline' }; },
+    async savePlayerAtomically() { return { ok: false, reason: 'offline' }; },
     subscribe,
     get status() { return getStatus(); },
     dispose() {},

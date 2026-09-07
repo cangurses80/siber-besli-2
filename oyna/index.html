@@ -33,6 +33,15 @@
 
       <div id="island-labels" class="island-labels" aria-hidden="true"></div>
       <div id="region-labels" class="region-labels" aria-hidden="true"></div>
+      <div id="ghost-labels" class="ghost-labels" aria-hidden="true"></div>
+
+      <aside id="world-community" class="world-community" aria-label="Dünya topluluğu">
+        <span class="world-community__eyebrow">BİRLİKTE İLERLİYORUZ</span>
+        <strong class="world-counter"><span id="global-solved-count">0</span> puzzle çözüldü</strong>
+        <span id="global-player-count" class="world-community__players"></span>
+        <h2>En çok çözen 20</h2>
+        <ol id="leaderboard-list" class="leaderboard-list"></ol>
+      </aside>
 
       <section id="island-card" class="island-card" aria-live="polite">
         <div class="island-card__main">
@@ -40,6 +49,10 @@
             <span id="card-eyebrow" class="island-card__eyebrow">SEÇİLİ ADA</span>
             <strong id="island-name">Güneş Kapısı</strong>
             <p id="island-status" class="island-status"></p>
+            <div id="island-community" class="island-community" hidden>
+              <p id="island-stat-line"></p>
+              <ul id="island-note-list"></ul>
+            </div>
             <p class="gesture-hint">Döndürmek için sürükle · Yaklaşmak için sıkıştır</p>
           </div>
           <div id="difficulty" class="difficulty" aria-label="Zorluk: 1 / 5">
@@ -75,6 +88,21 @@
             <button id="nickname-regenerate" class="nickname-button nickname-button--secondary" type="button">Yeniden üret</button>
             <button id="nickname-confirm" class="nickname-button nickname-button--primary" type="button">Bu olsun</button>
           </div>
+        </div>
+      </section>
+
+      <section id="note-room" class="note-room" aria-hidden="true" hidden>
+        <div class="note-card" role="dialog" aria-modal="true" aria-labelledby="note-title">
+          <span class="note-card__eyebrow">BULMACA ÇÖZÜLDÜ</span>
+          <h1 id="note-title">Sonraki okurlara not bırak</h1>
+          <p>Spoiler vermeyen bir cümle seç.</p>
+          <div id="note-phrase-list" class="note-phrase-list" role="radiogroup" aria-label="Not cümleleri"></div>
+          <button id="note-more" class="note-more" type="button">Başkalarını göster</button>
+          <p id="note-error" class="note-error" role="alert" hidden></p>
+          <div class="note-actions">
+            <button id="note-submit" class="note-button note-button--primary" type="button" disabled>Notu bırak</button>
+          </div>
+          <button id="note-skip" class="note-button note-button--skip" type="button">Not bırakmadan geç</button>
         </div>
       </section>
     </main>

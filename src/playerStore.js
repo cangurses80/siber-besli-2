@@ -86,6 +86,7 @@ export function serializePlayerState(worldData, progressState, puzzleRecords = {
   return {
     activeRegionId: progressState.activeRegionId,
     currentIslandId: progressState.currentIslandId,
+    solvedCount: progressState.solvedIslands instanceof Set ? progressState.solvedIslands.size : 0,
     solved,
     openBridges: [...new Set(openIds.filter((id) => islandBridgeIds.has(id)))],
     openRegionBridges: [...new Set(openIds.filter((id) => regionBridgeIds.has(id)))],

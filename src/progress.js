@@ -189,6 +189,29 @@ export function createProgress(worldData, initialState = {}) {
     return true;
   }
 
+  function hydrate(nextState = {}) {
+    solvedIslands.clear();
+    iterableValues(nextState.solvedIslands)
+      .filter((id) => islandById.has(id))
+      .forEach((id) => solvedIslands.add(id));
+
+    openBridges.clear();
+    initialOpenBridgeIds.forEach((id) => openBridges.add(id));
+    iterableValues(nextState.openBridges)
+      .filter((id) => validBridgeIds.has(id))
+      .forEach((id) => openBridges.add(id));
+
+    activeRegionId = regionById.has(nextState.activeRegionId)
+      ? nextState.activeRegionId
+      : worldData.regions[0].id;
+    const requestedIsland = islandById.get(nextState.currentIslandId);
+    currentIslandId = requestedIsland?.regionId === activeRegionId
+      ? requestedIsland.id
+      : regionById.get(activeRegionId).islands[0];
+    emit('progress-hydrated');
+    return getSnapshot();
+  }
+
   function subscribe(listener) {
     if (typeof listener !== 'function') throw new TypeError('listener bir fonksiyon olmalı');
     listeners.add(listener);
@@ -207,6 +230,7 @@ export function createProgress(worldData, initialState = {}) {
     solveRegion,
     setBridgeState,
     setActiveRegion,
+    hydrate,
     reset,
     subscribe,
   });

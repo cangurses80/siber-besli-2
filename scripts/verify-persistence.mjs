@@ -41,6 +41,7 @@ const serialized = serializePlayerState(world, hydrated.progressState, hydrated.
 assert.deepEqual(serialized.openBridges.sort(), ['helios-bridge-01', 'helios-bridge-02']);
 assert.deepEqual(serialized.openRegionBridges, ['region-bridge-01']);
 assert.deepEqual(Object.keys(serialized.solved), ['helios-01']);
+assert.equal(serialized.solvedCount, 1);
 assert.equal(serialized.schemaVersion, PLAYER_SCHEMA_VERSION);
 
 let records = recordPuzzleAttempt({}, 'helios-03');
@@ -66,6 +67,7 @@ assert.equal(newDocument.createdAt, SERVER_TIMESTAMP_MARKER);
 assert.equal(newDocument.lastSeenAt, SERVER_TIMESTAMP_MARKER);
 assert.equal(newDocument.schemaVersion, 1);
 assert.deepEqual(newDocument.solved, {});
+assert.equal(newDocument.solvedCount, 0);
 
 const reset = resetPlayerProgress(world);
 assert.equal(reset.progressState.solvedIslands.size, 0);

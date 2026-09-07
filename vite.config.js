@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
   build: {
+    manifest: true,
     rollupOptions: {
       input: {
         welcome: resolve(process.cwd(), 'index.html'),

@@ -49,6 +49,7 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
   let worldBlend = 0;
   let characterIslandId = selectedIslandId;
   let characterMove = null;
+  let ghostEntries = [];
 
   createSky(scene, globalResources);
   createMist(scene, globalResources);
@@ -96,6 +97,29 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
   });
 
   const zeynep = createCharacter('Zeynep', 'front', { resources: globalResources });
+  const ghostGroup = new THREE.Group();
+  ghostGroup.name = 'Recent reader ghost silhouettes';
+  const ghostTextureReady = new Promise((resolve, reject) => {
+    const texture = new THREE.TextureLoader().load(
+      '/assets/characters/zeynep_front.png',
+      resolve,
+      undefined,
+      reject,
+    );
+    texture.colorSpace = THREE.SRGBColorSpace;
+    globalResources.textures.push(texture);
+  });
+  const ghostTexture = globalResources.textures.at(-1);
+  const ghostMaterial = new THREE.SpriteMaterial({
+    map: ghostTexture,
+    color: 0x91d5ee,
+    transparent: true,
+    opacity: 0.35,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  globalResources.materials.push(ghostMaterial);
+  scene.add(ghostGroup);
   const contactShadowGeometry = new THREE.CircleGeometry(1, 24);
   contactShadowGeometry.rotateX(-Math.PI / 2);
   const contactShadowMaterial = new THREE.MeshBasicMaterial({
@@ -293,6 +317,7 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
 
   function disposeDetailedRegion() {
     if (!detailedRegion) return;
+    setGhostPlayers([]);
     scene.remove(detailedRegion.group);
     detailedRegion.bridgeVisuals.forEach((visual) => visual.dispose());
     detailedRegion.ownedResources.geometries.forEach((item) => item.dispose?.());
@@ -354,6 +379,73 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
       visual.updateAnimation(elapsedSeconds);
     });
     updateCharacter(elapsedSeconds, activeCamera);
+    updateGhostPlayers();
+  }
+
+  function setGhostPlayers(records = []) {
+    ghostGroup.clear();
+    const validRecords = records
+      .filter((record) => detailedRegion?.islandAnimationById.has(record.currentIslandId))
+      .slice(0, 12);
+    const islandCounts = new Map();
+    validRecords.forEach((record) => {
+      islandCounts.set(record.currentIslandId, (islandCounts.get(record.currentIslandId) || 0) + 1);
+    });
+    const islandIndexes = new Map();
+    ghostEntries = validRecords.map((record) => {
+      const slot = islandIndexes.get(record.currentIslandId) || 0;
+      islandIndexes.set(record.currentIslandId, slot + 1);
+      const sprite = new THREE.Sprite(ghostMaterial);
+      sprite.name = `Reader ghost: ${record.nickname}`;
+      sprite.renderOrder = 4;
+      ghostGroup.add(sprite);
+      return {
+        uid: record.uid,
+        nickname: record.nickname,
+        islandId: record.currentIslandId,
+        slot,
+        slotCount: islandCounts.get(record.currentIslandId),
+        sprite,
+        labelPosition: new THREE.Vector3(),
+      };
+    });
+    updateGhostPlayers();
+    return ghostEntries.length;
+  }
+
+  function updateGhostPlayers() {
+    if (!detailedRegion) return;
+    ghostGroup.visible = detailOpacity > 0.35;
+    ghostMaterial.opacity = 0.35 * Math.min(1, detailOpacity / 0.65);
+    ghostEntries.forEach((entry) => {
+      const animation = detailedRegion.islandAnimationById.get(entry.islandId);
+      if (!animation) return;
+      const angle = (entry.slot / Math.max(1, entry.slotCount)) * Math.PI * 2
+        + hashUnit(entry.islandId) * Math.PI * 2;
+      const offsetRadius = animation.island.radius * (entry.slotCount > 1 ? 0.32 : 0.22);
+      const mapReadabilityScale = 1 + regionBlend * 1.2;
+      const height = animation.island.radius
+        * (6.3 / ORIGINAL_START_ISLAND_RADIUS)
+        * 1.45
+        * mapReadabilityScale;
+      entry.sprite.position.set(
+        animation.base.x + Math.cos(angle) * offsetRadius,
+        getIslandTopY(animation) + height * 0.52,
+        animation.base.z + Math.sin(angle) * offsetRadius,
+      );
+      entry.sprite.scale.set(height * 0.304688, height, 1);
+      entry.labelPosition.copy(entry.sprite.position);
+      entry.labelPosition.y += height * 0.58;
+    });
+  }
+
+  function getGhostPositions() {
+    return ghostEntries.map((entry) => ({
+      uid: entry.uid,
+      nickname: entry.nickname,
+      islandId: entry.islandId,
+      position: entry.labelPosition.clone(),
+    }));
   }
 
   function updateCharacter(elapsedSeconds, activeCamera) {
@@ -539,7 +631,7 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
   createDetailedRegion(data.regions[0].id);
   moveCharacterTo(characterIslandId, 0, 0);
   setMapBlend(0, 0);
-  const ready = Promise.all([textures.ready, zeynep.userData.textureReady]);
+  const ready = Promise.all([textures.ready, zeynep.userData.textureReady, ghostTextureReady]);
 
   return {
     scene,
@@ -554,6 +646,8 @@ export function createWorldScene({ renderer, textures, data, debugMode = false }
     createDetailedRegion,
     disposeDetailedRegion,
     moveCharacterTo,
+    setGhostPlayers,
+    getGhostPositions,
     syncProgress,
     setBridgeState,
     getIslandPosition,
